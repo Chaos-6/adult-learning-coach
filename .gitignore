@@ -35,6 +35,9 @@ credentials.json
 htmlcov/
 .pytest_cache/
 
+# Uploaded files (local dev storage)
+uploads/
+
 # Distribution
 dist/
 *.egg-info/
