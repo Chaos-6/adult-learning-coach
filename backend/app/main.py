@@ -22,7 +22,7 @@ from app.database import init_db
 # IMPORTANT: Import models so SQLAlchemy registers them with Base.metadata
 # before init_db() calls create_all(). Without this, no tables get created.
 import app.models  # noqa: F401
-from app.routers import videos
+from app.routers import evaluations, videos
 
 
 @asynccontextmanager
@@ -69,6 +69,7 @@ app.add_middleware(
 # Each router handles a group of related endpoints.
 # The prefix is set in the router itself (e.g., /api/v1/videos).
 app.include_router(videos.router)
+app.include_router(evaluations.router)
 
 
 # --- Health Check Endpoints ---
