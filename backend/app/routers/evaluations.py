@@ -5,11 +5,14 @@ These handle the coaching evaluation lifecycle:
 1. POST /evaluations — Start a new evaluation (triggers transcription + analysis)
 2. GET /evaluations/{id} — Check status and get results
 3. GET /evaluations/{id}/transcript — Get the raw transcript
+4. GET /evaluations/{id}/report — Get the coaching report (JSON)
+5. GET /evaluations/{id}/report/pdf — Download coaching report as PDF
+6. GET /evaluations/{id}/worksheet/pdf — Download reflection worksheet as PDF
 
 The evaluation runs asynchronously in the background. The client:
 1. POSTs to start it → gets back an evaluation_id immediately
-2. Polls GET /{id} to check status → sees: queued → transcribing → completed
-3. Once completed, fetches the transcript and (later) the report
+2. Polls GET /{id} to check status → sees: queued → transcribing → analyzing → completed
+3. Once completed, fetches the report (JSON or PDF) and transcript
 
 This polling pattern is simple and reliable. In production, you'd
 add WebSocket support for real-time updates, but polling works fine for MVP.
@@ -19,11 +22,12 @@ import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Evaluation, Transcript, Video
+from app.models import Evaluation, Transcript, User, Video
 from app.schemas.evaluations import (
     EvaluationCreateRequest,
     EvaluationResponse,
@@ -31,6 +35,7 @@ from app.schemas.evaluations import (
     TranscriptResponse,
 )
 from app.services.evaluation import run_evaluation_pipeline
+from app.services.pdf_report import PDFReportGenerator
 
 router = APIRouter(prefix="/api/v1/evaluations", tags=["evaluations"])
 
@@ -223,3 +228,99 @@ async def get_report(
         processing_completed_at=evaluation.processing_completed_at,
         created_at=evaluation.created_at,
     )
+
+
+@router.get("/{evaluation_id}/report/pdf")
+async def download_report_pdf(
+    evaluation_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Download the coaching report as a PDF.
+
+    Generates the PDF on-the-fly from the stored markdown report.
+    This is a design choice: we generate PDFs on demand rather than
+    storing them. It's simpler (no S3 needed yet), and the generation
+    is fast (<100ms). We can cache or pre-generate later if needed.
+    """
+    evaluation = await _get_completed_evaluation(db, evaluation_id)
+    instructor_name = await _get_instructor_name(db, evaluation.instructor_id)
+
+    generator = PDFReportGenerator()
+    pdf_bytes = generator.generate_coaching_report(
+        report_markdown=evaluation.report_markdown,
+        instructor_name=instructor_name,
+        metrics=evaluation.metrics,
+        strengths=evaluation.strengths,
+        growth_opportunities=evaluation.growth_opportunities,
+    )
+
+    filename = f"coaching_report_{instructor_name.replace(' ', '_')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{evaluation_id}/worksheet/pdf")
+async def download_worksheet_pdf(
+    evaluation_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Download the reflection worksheet as a PDF.
+
+    The worksheet is a condensed, printable document with lined space
+    for the instructor to write reflections and action plans.
+    """
+    evaluation = await _get_completed_evaluation(db, evaluation_id)
+    instructor_name = await _get_instructor_name(db, evaluation.instructor_id)
+
+    generator = PDFReportGenerator()
+    pdf_bytes = generator.generate_reflection_worksheet(
+        instructor_name=instructor_name,
+        strengths=evaluation.strengths,
+        growth_opportunities=evaluation.growth_opportunities,
+        report_markdown=evaluation.report_markdown or "",
+    )
+
+    filename = f"reflection_worksheet_{instructor_name.replace(' ', '_')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# --- Helper functions for PDF endpoints ---
+
+async def _get_completed_evaluation(
+    db: AsyncSession, evaluation_id: UUID,
+) -> Evaluation:
+    """Load an evaluation that has a completed report. Raises 404/400."""
+    result = await db.execute(
+        select(Evaluation).where(Evaluation.id == evaluation_id)
+    )
+    evaluation = result.scalar_one_or_none()
+
+    if not evaluation:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+
+    if not evaluation.report_markdown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Report not ready. Current status: {evaluation.status}",
+        )
+
+    return evaluation
+
+
+async def _get_instructor_name(db: AsyncSession, instructor_id: UUID) -> str:
+    """Look up instructor display name, with fallback."""
+    if not instructor_id:
+        return "Instructor"
+
+    result = await db.execute(
+        select(User).where(User.id == instructor_id)
+    )
+    user = result.scalar_one_or_none()
+    return user.display_name if user else "Instructor"

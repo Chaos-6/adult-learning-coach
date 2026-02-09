@@ -82,10 +82,11 @@ async def run_evaluation_pipeline(evaluation_id: UUID) -> None:
 
             print(f"✅ Coaching analysis complete")
 
-            # --- Stage 3: PDF Generation (Week 9-10) ---
-            # evaluation.status = "generating_report"
-            # await db.commit()
-            # await _generate_reports(db, evaluation)
+            # --- Stage 3: PDF Generation ---
+            # PDFs are generated on-demand via the /report/pdf and
+            # /worksheet/pdf endpoints. No need to pre-generate since
+            # ReportLab renders in <100ms. This avoids storing PDF files
+            # and ensures users always get the latest format.
 
             # --- Mark complete ---
             evaluation.status = "completed"
