@@ -31,6 +31,23 @@ class EvaluationResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ReportResponse(BaseModel):
+    """Coaching report for an evaluation."""
+    id: UUID
+    video_id: UUID
+    instructor_id: UUID
+    status: str
+    report_markdown: Optional[str] = None
+    metrics: Optional[dict] = None
+    strengths: Optional[list] = None
+    growth_opportunities: Optional[list] = None
+    processing_started_at: Optional[datetime] = None
+    processing_completed_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class TranscriptResponse(BaseModel):
     """Transcript content for a video."""
     id: UUID

@@ -9,8 +9,14 @@ Uses Pydantic Settings to:
 Usage:
     from app.config import settings
     print(settings.DATABASE_URL)
+
+Note: We use a custom Settings source that prefers .env values over
+empty shell environment variables. This prevents empty env vars
+(like ANTHROPIC_API_KEY="" from Claude Desktop) from overriding
+real values in the .env file.
 """
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +28,25 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=True,     # ENV_VAR must match exactly
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def prefer_dotenv_over_empty_env(cls, data):
+        """If an env var is empty but .env has a value, use the .env value.
+
+        Pydantic Settings prioritizes real env vars over .env file values.
+        Problem: Claude Desktop sets ANTHROPIC_API_KEY="" in the shell,
+        which shadows the real key in .env. This validator fixes that by
+        loading .env values and filling in any blanks.
+        """
+        from dotenv import dotenv_values
+
+        dotenv_vals = dotenv_values(".env")
+        for key, dotenv_value in dotenv_vals.items():
+            # If the field is missing or empty, use the .env value
+            if dotenv_value and (key not in data or not data.get(key)):
+                data[key] = dotenv_value
+        return data
 
     # --- Database ---
     DATABASE_URL: str

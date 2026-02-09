@@ -27,6 +27,7 @@ from app.models import Evaluation, Transcript, Video
 from app.schemas.evaluations import (
     EvaluationCreateRequest,
     EvaluationResponse,
+    ReportResponse,
     TranscriptResponse,
 )
 from app.services.evaluation import run_evaluation_pipeline
@@ -182,3 +183,43 @@ async def get_transcript(
         )
 
     return TranscriptResponse.model_validate(transcript)
+
+
+@router.get("/{evaluation_id}/report", response_model=ReportResponse)
+async def get_report(
+    evaluation_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get the coaching report for an evaluation.
+
+    Only available after analysis is complete (status == 'completed').
+    Returns the full markdown report, extracted metrics, strengths,
+    and growth opportunities.
+    """
+    result = await db.execute(
+        select(Evaluation).where(Evaluation.id == evaluation_id)
+    )
+    evaluation = result.scalar_one_or_none()
+
+    if not evaluation:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+
+    if not evaluation.report_markdown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Report not ready. Current status: {evaluation.status}",
+        )
+
+    return ReportResponse(
+        id=evaluation.id,
+        video_id=evaluation.video_id,
+        instructor_id=evaluation.instructor_id,
+        status=evaluation.status,
+        report_markdown=evaluation.report_markdown,
+        metrics=evaluation.metrics,
+        strengths=evaluation.strengths,
+        growth_opportunities=evaluation.growth_opportunities,
+        processing_started_at=evaluation.processing_started_at,
+        processing_completed_at=evaluation.processing_completed_at,
+        created_at=evaluation.created_at,
+    )

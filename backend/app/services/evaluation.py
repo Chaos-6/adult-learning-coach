@@ -23,7 +23,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal
-from app.models import Evaluation, Transcript, Video
+from app.models import Evaluation, Transcript, User, Video
+from app.services.analysis import AnalysisService
 from app.services.storage import get_storage_service
 from app.services.transcription import TranscriptionService
 
@@ -70,10 +71,16 @@ async def run_evaluation_pipeline(evaluation_id: UUID) -> None:
             print(f"✅ Transcription complete: {transcript.word_count} words, "
                   f"{transcript.speaker_count} speakers")
 
-            # --- Stage 2: Coaching Analysis (Week 7-8) ---
-            # evaluation.status = "analyzing"
-            # await db.commit()
-            # await _run_analysis(db, transcript, evaluation)
+            # --- Stage 2: Coaching Analysis ---
+            evaluation.status = "analyzing"
+            await db.commit()
+
+            print(f"🧠 Starting coaching analysis with Claude...")
+            analysis_success = await _run_analysis(db, transcript, evaluation)
+            if not analysis_success:
+                return  # _run_analysis handles failure
+
+            print(f"✅ Coaching analysis complete")
 
             # --- Stage 3: PDF Generation (Week 9-10) ---
             # evaluation.status = "generating_report"
@@ -81,7 +88,7 @@ async def run_evaluation_pipeline(evaluation_id: UUID) -> None:
             # await _generate_reports(db, evaluation)
 
             # --- Mark complete ---
-            evaluation.status = "transcribed"  # Will be "completed" once all stages work
+            evaluation.status = "completed"
             evaluation.processing_completed_at = datetime.now(timezone.utc)
             await db.commit()
 
@@ -149,6 +156,61 @@ async def _run_transcription(
         traceback.print_exc()
         await _fail_evaluation(db, evaluation, f"Transcription failed: {str(e)}")
         return None
+
+
+async def _run_analysis(
+    db: AsyncSession,
+    transcript: Transcript,
+    evaluation: Evaluation,
+) -> bool:
+    """Run the coaching analysis stage of the pipeline.
+
+    Sends the transcript to Claude for coaching analysis. Like
+    transcription, the Anthropic SDK is synchronous, so we run it
+    in a thread pool to avoid blocking the event loop.
+
+    Returns:
+        True if successful, False if failed.
+    """
+    try:
+        # Look up instructor name for personalized report
+        instructor_name = "the instructor"
+        if evaluation.instructor_id:
+            user_result = await db.execute(
+                select(User).where(User.id == evaluation.instructor_id)
+            )
+            user = user_result.scalar_one_or_none()
+            if user:
+                instructor_name = user.display_name
+
+        # Run the blocking Claude API call in a thread pool
+        service = AnalysisService()
+        result = await asyncio.to_thread(
+            service.analyze, transcript.transcript_text, instructor_name
+        )
+
+        # Save analysis results to the evaluation record
+        evaluation.report_markdown = result.report_markdown
+        evaluation.strengths = result.strengths
+        evaluation.growth_opportunities = result.growth_opportunities
+
+        # Merge extracted coaching metrics with API usage metadata
+        evaluation.metrics = {
+            **result.metrics,
+            "analysis_input_tokens": result.input_tokens,
+            "analysis_output_tokens": result.output_tokens,
+            "analysis_processing_seconds": result.processing_time_seconds,
+            "analysis_model": result.model,
+        }
+
+        await db.commit()
+        return True
+
+    except Exception as e:
+        print(f"❌ Analysis failed: {str(e)}")
+        traceback.print_exc()
+        await _fail_evaluation(db, evaluation, f"Analysis failed: {str(e)}")
+        return False
 
 
 async def _fail_evaluation(
