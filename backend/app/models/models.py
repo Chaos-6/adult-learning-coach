@@ -4,12 +4,14 @@ SQLAlchemy models — these define the database tables.
 Each class maps to a PostgreSQL table. The columns become table columns.
 Relationships (ForeignKey) link tables together.
 
-The PRD defines 6 tables. We're implementing the core 5 for MVP:
+The PRD defines 6 tables. We're implementing these for MVP + comparison:
 - organizations: Multi-tenant grouping
 - users: Instructors, coaches, admins
 - videos: Uploaded training session recordings
 - transcripts: Time-stamped text from video transcription
 - evaluations: AI-generated coaching analysis results
+- comparisons: Multi-video cross-session analysis
+- comparison_evaluations: M:N join linking comparisons to evaluations
 """
 
 import uuid
@@ -182,3 +184,88 @@ class Evaluation(Base):
 
     # Relationships
     video = relationship("Video", back_populates="evaluations")
+    comparison_links = relationship("ComparisonEvaluation", back_populates="evaluation")
+
+
+class Comparison(Base):
+    """A cross-session analysis comparing multiple coaching evaluations.
+
+    Three comparison types, each with a different analytical lens:
+    - personal_performance: Same instructor, multiple sessions → improvement tracking
+    - class_delivery: Same class, different instructors → delivery variation
+    - program_evaluation: Sample from a program → programmatic consistency
+
+    The comparison analyzes existing evaluation reports (not raw transcripts)
+    to stay within Claude's token budget. 10 reports ≈ 80K tokens vs.
+    10 transcripts ≈ 500K tokens.
+
+    Lifecycle: draft → queued → analyzing → completed/failed
+    """
+    __tablename__ = "comparisons"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title = Column(String(500), nullable=False)
+    comparison_type = Column(
+        String(50), nullable=False
+    )  # 'personal_performance', 'class_delivery', 'program_evaluation'
+    status = Column(String(50), default="draft")  # draft, queued, analyzing, completed, failed
+
+    # Ownership
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id"))
+    created_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+
+    # Comparison-specific settings
+    class_tag = Column(String(200))  # For class_delivery: groups by class name
+    anonymize_instructors = Column(Boolean, default=False)
+
+    # Analysis outputs (same shape as Evaluation for consistency)
+    report_markdown = Column(Text)
+    metrics = Column(JSONB, default=dict)
+    strengths = Column(JSONB, default=list)
+    growth_opportunities = Column(JSONB, default=list)
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    processing_started_at = Column(DateTime(timezone=True))
+    processing_completed_at = Column(DateTime(timezone=True))
+
+    # Relationships
+    organization = relationship("Organization")
+    created_by = relationship("User")
+    evaluation_links = relationship(
+        "ComparisonEvaluation",
+        back_populates="comparison",
+        order_by="ComparisonEvaluation.display_order",
+    )
+
+
+class ComparisonEvaluation(Base):
+    """Join table linking comparisons to evaluations (many-to-many).
+
+    This allows:
+    - One comparison to include 2-10 evaluations
+    - One evaluation to appear in multiple comparisons
+    - Extra metadata per link: display ordering and optional labels
+      (e.g., "Session 1", "Instructor A")
+    """
+    __tablename__ = "comparison_evaluations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    comparison_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("comparisons.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    evaluation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("evaluations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    display_order = Column(Integer, nullable=False, default=0)
+    label = Column(String(200))  # Optional: "Session 1", "Instructor A", etc.
+
+    # Relationships
+    comparison = relationship("Comparison", back_populates="evaluation_links")
+    evaluation = relationship("Evaluation", back_populates="comparison_links")

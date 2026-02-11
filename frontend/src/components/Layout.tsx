@@ -30,6 +30,7 @@ import {
 import MenuIcon from "@mui/icons-material/Menu";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
+import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import SchoolIcon from "@mui/icons-material/School";
 
 const DRAWER_WIDTH = 240;
@@ -37,6 +38,7 @@ const DRAWER_WIDTH = 240;
 const navItems = [
   { label: "Dashboard", path: "/", icon: <DashboardIcon /> },
   { label: "Upload Video", path: "/upload", icon: <CloudUploadIcon /> },
+  { label: "Compare Videos", path: "/comparisons/new", icon: <CompareArrowsIcon /> },
 ];
 
 export default function Layout() {

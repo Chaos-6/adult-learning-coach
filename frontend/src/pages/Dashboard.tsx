@@ -6,8 +6,11 @@
  * 2. Metric trend cards (speaking pace, filler words, etc.)
  * 3. Top strengths and recurring growth areas
  * 4. Recent evaluations list with links to reports
+ * 5. Recent comparisons list with links to comparison reports
  *
- * Data comes from GET /api/v1/instructors/{id}/dashboard
+ * Data comes from:
+ *   - GET /api/v1/instructors/{id}/dashboard (evaluations)
+ *   - GET /api/v1/comparisons (comparisons)
  *
  * Design decision: We hardcode the instructor ID for now (MVP).
  * In a real app, this would come from authentication context.
@@ -39,8 +42,9 @@ import TrendingFlatIcon from "@mui/icons-material/TrendingFlat";
 import StarIcon from "@mui/icons-material/Star";
 import EmojiObjectsIcon from "@mui/icons-material/EmojiObjects";
 import AssessmentIcon from "@mui/icons-material/Assessment";
+import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import { useQuery } from "@tanstack/react-query";
-import { getInstructorDashboard } from "../api/client";
+import { getInstructorDashboard, listComparisons } from "../api/client";
 
 // MVP: hardcoded instructor ID from our seed data
 const INSTRUCTOR_ID = "3707ea11-ce8a-46dc-a4ae-93a5b895c0bb";
@@ -100,6 +104,12 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ["dashboard", INSTRUCTOR_ID],
     queryFn: () => getInstructorDashboard(INSTRUCTOR_ID),
+  });
+
+  // Fetch recent comparisons (independent of the dashboard query)
+  const { data: comparisonsData } = useQuery({
+    queryKey: ["comparisons", "recent"],
+    queryFn: () => listComparisons({ page: 1, page_size: 5 }),
   });
 
   if (isLoading) {
@@ -336,6 +346,74 @@ export default function Dashboard() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Recent Comparisons */}
+      {comparisonsData && comparisonsData.items?.length > 0 && (
+        <Box sx={{ mt: 4 }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
+            <CompareArrowsIcon sx={{ color: "primary.main" }} />
+            <Typography variant="h6">Recent Comparisons</Typography>
+          </Box>
+          <TableContainer component={Paper}>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Title</TableCell>
+                  <TableCell>Type</TableCell>
+                  <TableCell>Evaluations</TableCell>
+                  <TableCell>Status</TableCell>
+                  <TableCell>Date</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {comparisonsData.items.map((comp: any) => (
+                  <TableRow
+                    key={comp.id}
+                    hover
+                    sx={{ cursor: "pointer" }}
+                    onClick={() => navigate(`/comparisons/${comp.id}`)}
+                  >
+                    <TableCell>{comp.title}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={
+                          comp.comparison_type === "personal_performance"
+                            ? "Personal"
+                            : comp.comparison_type === "class_delivery"
+                            ? "Class"
+                            : "Program"
+                        }
+                        size="small"
+                        variant="outlined"
+                        color="primary"
+                      />
+                    </TableCell>
+                    <TableCell>{comp.evaluations?.length || 0}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={comp.status}
+                        size="small"
+                        color={
+                          comp.status === "completed"
+                            ? "success"
+                            : comp.status === "failed"
+                            ? "error"
+                            : comp.status === "analyzing"
+                            ? "warning"
+                            : "default"
+                        }
+                      />
+                    </TableCell>
+                    <TableCell>
+                      {new Date(comp.created_at).toLocaleDateString()}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Box>
+      )}
     </Box>
   );
 }

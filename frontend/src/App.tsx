@@ -2,9 +2,11 @@
  * App root — sets up routing and global providers.
  *
  * Route structure:
- *   /                         → Dashboard (instructor home)
- *   /upload                   → Upload a new video
- *   /evaluations/:evaluationId → View evaluation report
+ *   /                              → Dashboard (instructor home)
+ *   /upload                        → Upload a new video
+ *   /evaluations/:evaluationId     → View evaluation report
+ *   /comparisons/new               → Create a new comparison
+ *   /comparisons/:comparisonId     → View comparison report
  *
  * Providers:
  *   - ThemeProvider: MUI theme (colors, typography, component overrides)
@@ -24,6 +26,8 @@ import Layout from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
 import Upload from "./pages/Upload";
 import EvaluationDetail from "./pages/EvaluationDetail";
+import ComparisonCreate from "./pages/ComparisonCreate";
+import ComparisonDetail from "./pages/ComparisonDetail";
 
 // React Query client — manages server state caching and refetching.
 // staleTime: 30s means data is considered "fresh" for 30s after fetch.
@@ -51,6 +55,11 @@ function App() {
               <Route
                 path="/evaluations/:evaluationId"
                 element={<EvaluationDetail />}
+              />
+              <Route path="/comparisons/new" element={<ComparisonCreate />} />
+              <Route
+                path="/comparisons/:comparisonId"
+                element={<ComparisonDetail />}
               />
             </Route>
           </Routes>

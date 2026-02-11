@@ -106,4 +106,62 @@ export const getMetricTrend = async (
   return response.data;
 };
 
+// --- Comparisons ---
+
+export const createComparison = async (data: {
+  title: string;
+  comparison_type: string;
+  evaluation_ids: string[];
+  created_by_id: string;
+  organization_id?: string;
+  class_tag?: string;
+  anonymize_instructors?: boolean;
+  start_immediately?: boolean;
+}) => {
+  const response = await api.post("/comparisons", data);
+  return response.data;
+};
+
+export const listComparisons = async (params?: {
+  page?: number;
+  page_size?: number;
+  comparison_type?: string;
+  status?: string;
+}) => {
+  const response = await api.get("/comparisons", { params });
+  return response.data;
+};
+
+export const getComparison = async (comparisonId: string) => {
+  const response = await api.get(`/comparisons/${comparisonId}`);
+  return response.data;
+};
+
+export const startComparison = async (comparisonId: string) => {
+  const response = await api.post(`/comparisons/${comparisonId}/start`);
+  return response.data;
+};
+
+export const getComparisonReport = async (comparisonId: string) => {
+  const response = await api.get(`/comparisons/${comparisonId}/report`);
+  return response.data;
+};
+
+export const downloadComparisonReportPdf = async (comparisonId: string) => {
+  const response = await api.get(`/comparisons/${comparisonId}/report/pdf`, {
+    responseType: "blob",
+  });
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "comparison_report.pdf";
+  link.click();
+  window.URL.revokeObjectURL(url);
+};
+
+export const deleteComparison = async (comparisonId: string) => {
+  const response = await api.delete(`/comparisons/${comparisonId}`);
+  return response.data;
+};
+
 export default api;
