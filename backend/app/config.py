@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     AWS_REGION: str = "us-west-2"
     AWS_S3_BUCKET: str = "coaching-videos"
 
+    # --- Google Docs Export (CLI only) ---
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+
     # --- Security ---
     SECRET_KEY: str
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
