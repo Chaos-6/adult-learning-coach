@@ -110,36 +110,44 @@ class AnalysisService:
         )
 
     def _extract_metrics(self, report: str) -> dict:
-        """Parse the Metrics Snapshot table from the report.
+        """Parse the Metrics Snapshot from the report.
 
-        Looks for the markdown table and extracts key-value pairs.
-        This is best-effort — if Claude formats the table differently,
-        we still have the full report as fallback.
+        Supports both the new plain-text format ("Speaking Pace: 145 WPM")
+        and the legacy markdown table format ("Speaking Pace | 145").
+        This is best-effort — if Claude formats differently, we still
+        have the full report as fallback.
         """
         metrics = {}
 
-        # Try to extract WPM
-        wpm_match = re.search(r'Speaking Pace.*?\|\s*(\d+(?:\.\d+)?)', report)
+        # Plain-text format: "Speaking Pace: 145 WPM" or "Speaking Pace: 145.2 WPM"
+        # Legacy markdown: "Speaking Pace | 145"
+        wpm_match = re.search(
+            r'Speaking Pace[:\s|]+(\d+(?:\.\d+)?)', report
+        )
         if wpm_match:
             metrics["wpm"] = float(wpm_match.group(1))
 
-        # Strategic pauses per 10 min
-        pause_match = re.search(r'Strategic Pauses.*?\|\s*(\d+(?:\.\d+)?)', report)
+        pause_match = re.search(
+            r'Strategic Pauses[:\s|]+(\d+(?:\.\d+)?)', report
+        )
         if pause_match:
             metrics["pauses_per_10min"] = float(pause_match.group(1))
 
-        # Filler words per min
-        filler_match = re.search(r'Filler Words.*?\|\s*(\d+(?:\.\d+)?)', report)
+        filler_match = re.search(
+            r'Filler Words[:\s|]+(\d+(?:\.\d+)?)', report
+        )
         if filler_match:
             metrics["filler_words_per_min"] = float(filler_match.group(1))
 
-        # Questions per 5 min
-        question_match = re.search(r'Questions.*?\|\s*(\d+(?:\.\d+)?)', report)
+        question_match = re.search(
+            r'Questions\s*(?:Asked)?[:\s|]+(\d+(?:\.\d+)?)', report
+        )
         if question_match:
             metrics["questions_per_5min"] = float(question_match.group(1))
 
-        # Tangent time %
-        tangent_match = re.search(r'Tangent.*?\|\s*(\d+(?:\.\d+)?)%?', report)
+        tangent_match = re.search(
+            r'Tangent\s*(?:Time)?[:\s|]+(\d+(?:\.\d+)?)%?', report
+        )
         if tangent_match:
             metrics["tangent_percentage"] = float(tangent_match.group(1))
 
@@ -148,34 +156,73 @@ class AnalysisService:
     def _extract_sections(self, report: str, section_title: str) -> list[dict]:
         """Extract individual items from a report section.
 
-        Looks for bold headings (**text**) under the given section
-        and captures the content until the next heading.
+        Supports both the new plain-text format and the legacy markdown format.
+
+        New format:
+            STRENGTHS TO BUILD ON
+            1. Title Here
+            Why this is effective:
+            paragraph...
+            How to amplify:
+            paragraph...
+
+        Legacy format:
+            ## Strengths to Build On
+            - **Title Here**
+              - bullet text...
         """
         items = []
 
-        # Find the section
-        section_pattern = rf'## {re.escape(section_title)}\s*\n(.*?)(?=\n## |\Z)'
-        section_match = re.search(section_pattern, report, re.DOTALL)
+        # Try new plain-text format first: "SECTION TITLE" in all caps on its own line
+        # Map display titles to the ALL CAPS headers used in the new prompt format
+        caps_title = section_title.upper()
+        section_pattern = rf'^{re.escape(caps_title)}\s*\n(.*?)(?=\n[A-Z][A-Z ]{{5,}}\s*$|\Z)'
+        section_match = re.search(section_pattern, report, re.DOTALL | re.MULTILINE)
+
+        if not section_match:
+            # Fallback: try legacy markdown format
+            section_pattern = rf'##\s+{re.escape(section_title)}\s*\n(.*?)(?=\n##\s|\Z)'
+            section_match = re.search(section_pattern, report, re.DOTALL)
 
         if not section_match:
             return items
 
         section_text = section_match.group(1)
 
-        # Find individual items (bold headings)
-        item_pattern = r'\*\*(.+?)\*\*\s*\n(.*?)(?=\n\s*(?:- )?\*\*|\Z)'
-        for match in re.finditer(item_pattern, section_text, re.DOTALL):
-            title = match.group(1).strip()
-            body = match.group(2).strip()
+        # Try new plain-text format: "1. Title\nWhy this is effective:\n..."
+        numbered_pattern = r'(\d+)\.\s+(.+?)(?:\n)(?:Why this (?:is effective|matters):)(.*?)(?=\n\d+\.\s+|\Z)'
+        numbered_matches = list(re.finditer(numbered_pattern, section_text, re.DOTALL))
 
-            # Try to extract a timestamp
-            timestamp_match = re.search(r'\[(\d{2}:\d{2}:\d{2})\]', body)
-            timestamp = timestamp_match.group(1) if timestamp_match else None
+        if numbered_matches:
+            for match in numbered_matches:
+                title = match.group(2).strip()
+                body = match.group(3).strip()
 
-            items.append({
-                "title": title,
-                "text": body[:500],  # Cap at 500 chars for DB storage
-                "timestamp": timestamp,
-            })
+                # Extract timestamp — supports MM:SS and HH:MM:SS, with or without brackets
+                timestamp_match = re.search(
+                    r'\[?(\d{1,2}:\d{2}(?::\d{2})?)\]?', body
+                )
+                timestamp = timestamp_match.group(1) if timestamp_match else None
+
+                items.append({
+                    "title": title,
+                    "text": body[:500],
+                    "timestamp": timestamp,
+                })
+        else:
+            # Fallback: legacy markdown bold heading format
+            item_pattern = r'\*\*(.+?)\*\*\s*\n(.*?)(?=\n\s*(?:- )?\*\*|\Z)'
+            for match in re.finditer(item_pattern, section_text, re.DOTALL):
+                title = match.group(1).strip()
+                body = match.group(2).strip()
+
+                timestamp_match = re.search(r'\[(\d{2}:\d{2}:\d{2})\]', body)
+                timestamp = timestamp_match.group(1) if timestamp_match else None
+
+                items.append({
+                    "title": title,
+                    "text": body[:500],
+                    "timestamp": timestamp,
+                })
 
         return items
