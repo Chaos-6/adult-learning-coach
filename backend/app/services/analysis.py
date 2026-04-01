@@ -82,9 +82,13 @@ class AnalysisService:
         user_prompt = build_analysis_prompt(transcript, instructor_name, class_name)
 
         # Call Claude
+        # max_tokens must be large enough for the full JSON response.
+        # The enriched prompt (operational definitions, evidence quotes,
+        # evidence arrays, confidence labels) produces ~12K-16K tokens.
+        # 8192 caused truncation → malformed JSON → empty reports.
         message = self.client.messages.create(
             model=self.model,
-            max_tokens=8192,
+            max_tokens=16384,
             temperature=0.3,      # Low temp = more consistent analysis
             system=SYSTEM_PROMPT,
             messages=[
@@ -93,6 +97,13 @@ class AnalysisService:
         )
 
         processing_time = int(time.time() - start_time)
+
+        # Check for truncation — if Claude hit the token limit, the JSON
+        # will be incomplete and unparseable.
+        if message.stop_reason == "max_tokens":
+            print(f"[AnalysisService] WARNING: Response truncated at max_tokens "
+                  f"({message.usage.output_tokens} tokens). JSON will likely be "
+                  f"malformed. Consider increasing max_tokens.")
 
         # Extract the raw response text
         raw_response = message.content[0].text
