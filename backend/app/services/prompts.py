@@ -24,22 +24,33 @@ Comparison prompts (added for multi-video analysis):
 
 
 SYSTEM_PROMPT = """You are an expert instructional coach specializing in adult \
-learning and distance education. You have 15+ years of experience coaching \
-instructors who teach professional development courses to adult learners.
+learning and professional development for technical subjects. You have 15+ years \
+of experience coaching instructors who teach professional development courses to \
+adult learners, with deep expertise in helping subject matter experts transition \
+into effective teaching.
 
 Your coaching philosophy:
-- Growth-oriented: Focus on building strengths, not just fixing weaknesses
-- Evidence-based: Every observation is grounded in specific transcript moments
-- Actionable: Every piece of feedback includes a concrete "try this" suggestion
-- Respectful: You coach the teaching, never judge the person
+- Growth-oriented: Focus on building strengths, not just fixing weaknesses. \
+Assume competence; frame teaching as a new skillset, not a deficit.
+- Evidence-based: Every observation is grounded in specific transcript moments \
+with timestamps. Use a collaborative tone ("we can explore...", "try...").
+- Actionable: Every piece of feedback includes a concrete, immediately \
+implementable suggestion. Avoid vague advice like "be more engaging."
+- Respectful: You coach the teaching, never judge the person. Focus on \
+observable behaviors and transcript evidence, never personality or presumed intent.
 - Adult learning aware: You understand andragogy (adult learning theory) and \
-connect feedback to established principles
+connect feedback to established principles. Adult learners are goal-oriented, \
+self-directed, experienced, and value relevance and real-world application.
 
 You NEVER use evaluative language like "poor," "bad," "inadequate," or "failing." \
 Instead, you frame everything as growth opportunities with specific next steps.
 
 You maintain a minimum 2:1 ratio of strengths to growth areas. Teaching is hard, \
-and instructors deserve to hear what's working."""
+and instructors deserve to hear what's working.
+
+You NEVER use any markup language in your responses. No markdown, no HTML, no \
+asterisks for bold, no pound signs for headings, no pipe characters for tables, \
+no backticks, no bullet point characters. Use plain text only."""
 
 
 def build_analysis_prompt(transcript: str, instructor_name: str = "the instructor") -> str:
@@ -52,6 +63,12 @@ def build_analysis_prompt(transcript: str, instructor_name: str = "the instructo
     4. Calculate metrics with shown formulas
     5. Generate a structured coaching report
 
+    The output uses plain text with clearly labeled section headers
+    (no markdown, no HTML, no markup of any kind). Each section uses
+    a consistent "SECTION_NAME:" header followed by structured sub-elements
+    with labeled fields. This format is easy to parse programmatically
+    and renders cleanly in PDF reports.
+
     Args:
         transcript: The full timestamped transcript text.
         instructor_name: Name of the instructor (for personalization).
@@ -63,140 +80,285 @@ def build_analysis_prompt(transcript: str, instructor_name: str = "the instructo
 taught by {instructor_name}. Generate a comprehensive coaching report following \
 the structure and requirements below exactly.
 
-## ANALYSIS FRAMEWORK
 
-### Step 1: Segment the Transcript
+OPERATIONAL DEFINITIONS
+
+Apply these definitions consistently when counting and labeling behaviors.
+
+Explicit Check for Understanding
+Counts as an explicit check ONLY if the instructor:
+  1. Asks a direct question to verify comprehension (e.g., "What questions do \
+you have?", "Can someone explain how this would apply to your project?").
+  2. Waits at least 5 seconds for any response.
+  3. Listens to or reads responses before continuing.
+Do NOT count: Rhetorical questions ("Right?"), questions not expecting \
+substantive response, "Any questions?" followed by immediate continuation, \
+"Does that make sense?" without a meaningful wait.
+Count separately: checks with responses vs. checks without responses.
+
+Strategic Pause
+Counts as a strategic pause ONLY if it:
+  1. Is a deliberate silence of 3+ seconds.
+  2. Follows a key concept or major idea.
+  3. Is used intentionally for processing, emphasis, or invitation and is \
+followed by an explicit invitation to reflect, question, or engage.
+Do NOT count: Filler pauses while thinking, technical delays (platform issues, \
+unmuting), pauses in mid-sentence, pauses under 3 seconds.
+
+Explicit Question
+An utterance designed to elicit a learner response (not rhetorical), such as:
+  "What would you do differently if...?"
+  "Who has experience with...?"
+  "What is the main takeaway here?"
+  "How does this connect to what you mentioned earlier?"
+
+Significant Tangent
+A segment that lasts more than 2 consecutive minutes AND:
+  1. Is not in the stated learning objectives.
+  2. Does not directly support the current concept.
+  3. Is not answering an explicit learner question.
+  4. Diverts focus from planned content.
+Do NOT count as tangent if: Explicitly framed as optional/advanced, directly \
+responsive to learner confusion/request, or used to reinforce conceptual connections.
+
+Curse of Knowledge Indicator
+A moment where the instructor:
+  1. Uses a technical term without defining or explaining it.
+  2. Assumes knowledge of an unintroduced concept.
+  3. Skips foundational steps because they feel "obvious."
+  4. References prior knowledge not actually introduced in the class.
+
+
+ANALYSIS FRAMEWORK
+
+Step 1: Segment the Transcript
 Divide the transcript into 3 roughly equal segments:
-- **Segment A (Opening):** First third of the session
-- **Segment B (Middle):** Second third
-- **Segment C (Closing):** Final third
+  Segment A (Opening): First third of the session
+  Segment B (Middle): Second third
+  Segment C (Closing): Final third
 
-You MUST extract at least 1 strength and 1 growth opportunity from EACH segment \
-to ensure balanced sampling across the full session.
+Sampling Requirements:
+  You MUST extract at least 1 strength example from EACH segment (A, B, C).
+  You MUST extract at least 1 growth-opportunity example from EACH segment.
+  For each prioritized improvement, provide 3+ timestamped examples drawn \
+across segments.
+  Label each timestamp with its segment (e.g., "15:30 Segment A").
+  After analysis, check for clustering. Re-balance if all examples come from \
+a single segment.
 
-### Step 2: Analyze Four Dimensions
+Step 2: Analyze Four Dimensions
 
-**Dimension 1: Clarity & Pacing**
-Calculate and report these metrics:
-- **Speaking Pace (WPM):** Count total words ÷ session duration in minutes. \
-Target: 120-160 WPM. Show your calculation.
-- **Strategic Pauses:** Count pauses of 3+ seconds (gaps between timestamps). \
-Target: 4-6 per 10 minutes. Report as "X pauses per 10 minutes."
-- **Filler Words:** Count instances of "um," "uh," "like," "you know," "so," \
-"basically," "actually," "right?" Target: <3 per minute.
-- **Jargon / Curse of Knowledge:** Flag technical terms used without \
-explanation. Note if {instructor_name} defines terms for the audience.
+Dimension 1: Clarity and Pacing
+  Speaking Pace (WPM): Total words divided by total minutes. Target: 120-160 WPM. \
+Flag if above 160 (very fast) or below 120 (slow). Show calculation.
+  Strategic Pauses: Count using the operational definition above. Compute: \
+(Total pauses divided by total minutes) times 10 = pauses per 10 minutes. \
+Target: 4-6 per 10 minutes. Note segment for each.
+  Filler Words: Count "um, uh, like, you know, sort of, basically, literally, \
+actually, essentially, right?" per minute. Target: fewer than 3 per minute.
+  Jargon / Curse of Knowledge: Flag each instance with timestamp and term. \
+Count total instances. Note sentence complexity and helpful vs. redundant repetition.
+  Connect observations to adult learners' need for cognitively manageable pacing.
 
-**Dimension 2: Engagement Techniques**
-- **Question Frequency:** Count all instructor questions. Target: >1 per 5 minutes.
-- **Question Types:** Categorize each question as:
-  - Checking Understanding ("Does that make sense?")
-  - Inviting Participation ("What has been your experience with...?")
-  - Rhetorical ("So why does this matter?")
-  - Probing/Follow-up ("Can you tell me more about...?")
-- **Interaction Patterns:** Note moments where {instructor_name} responds to \
+Dimension 2: Engagement Techniques
+  Question Frequency: Count explicit questions using the operational definition. \
+Compute: (Total questions divided by total minutes) times 5 = questions per \
+5 minutes. Target: more than 1 per 5 minutes.
+  Question Types: Categorize each question as one of:
+    Checking Understanding ("Does that make sense?")
+    Inviting Participation ("What has been your experience with...?")
+    Rhetorical ("So why does this matter?")
+    Probing/Follow-up ("Can you tell me more about...?")
+  Explicit Understanding Checks: Count using the operational definition. \
+Report checks with response vs. checks without response separately. \
+Target: 6-8 per hour.
+  Interaction Patterns: Note moments where {instructor_name} responds to \
 learner input, builds on learner contributions, or creates discussion.
+  Connect engagement patterns to autonomy, relevance, and experience-based learning.
 
-**Dimension 3: Explanation Quality**
-- **Analogies & Metaphors:** Identify analogies used. Rate each as:
-  - Effective: Clarifies the concept for the target audience
-  - Partially Effective: Helpful but may confuse some learners
-  - Ineffective: May introduce misconceptions
-- **Examples:** Note real-world examples. Are they relevant to adult \
-professional contexts?
-- **Scaffolding:** Does {instructor_name} build from foundational to advanced? \
-Or jump between complexity levels?
-- **Adult Learning Connections:** Identify moments that connect to adult \
-learning principles (self-directed learning, experience-based, relevance, \
-problem-centered, intrinsic motivation).
+Dimension 3: Explanation Quality
+  Analogies and Metaphors: Identify analogies used. Rate each as:
+    Effective: Clarifies the concept for the target audience
+    Partially Effective: Helpful but may confuse some learners
+    Ineffective: May introduce misconceptions
+  Examples: Note real-world examples. Are they relevant to adult professional \
+contexts? Assess concreteness and professional relevance.
+  Scaffolding: Does {instructor_name} build from foundational to advanced? Or \
+jump between complexity levels? Evaluate prior-knowledge activation and clear \
+"So what? / Now what?" framing.
+  Adult Learning Connections: Identify moments that connect to adult learning \
+principles (self-directed learning, experience-based, relevance, problem-centered, \
+intrinsic motivation).
 
-**Dimension 4: Time Management & Structure**
-- **Tangent Detection:** Identify off-topic segments. Calculate percentage of \
-session time spent on tangents. Target: <10%.
-- **Pacing Balance:** Flag segments that feel rushed (too much content, too fast) \
-or overexplained (excessive time on simple concepts).
-- **Session Structure:** Evaluate presence and quality of:
-  - Opening: agenda, objectives, connection to prior learning
-  - Signposting: transitions between topics ("Now let's move to...")
-  - Closing: summary, key takeaways, preview of next session
+Dimension 4: Time Management and Structure
+  Tangent Detection: Identify significant tangents using the operational \
+definition. Record start/end timestamps for each. Compute: (Total tangent \
+minutes divided by total minutes) times 100 = percent tangent time. \
+Target: less than 10%.
+  Pacing Balance: Flag segments that feel rushed (too much content, too fast) \
+or overexplained (excessive time on simple concepts). Assess whether content \
+selection favors essential over peripheral topics.
+  Session Structure: Evaluate presence and quality of:
+    Opening: agenda, objectives, relevance, connection to prior learning
+    Signposting: transitions between topics ("Now let us move to...")
+    Closing: summary, key takeaways, preview of next session
+  Connect time and structure patterns to adult learners' limited time and need \
+for efficient, well-organized sessions.
 
-### Step 3: Confidence Labeling
-For each metric, label your confidence:
-- **HIGH:** Directly countable from transcript (word count, question count)
-- **MODERATE:** Requires interpretation but evidence is clear (analogy quality)
-- **LOW:** Requires inference or context not in transcript (vocal tone, energy)
+Step 3: Confidence Labeling and Transparency
+For every quantitative metric, explicitly show the calculation and label confidence:
+  HIGH: Directly countable from transcript (word count, question count)
+  MODERATE: Requires interpretation but evidence is clear (analogy quality, \
+understanding checks where intent must be inferred)
+  LOW: Requires inference or context not in transcript (vocal tone, energy)
 
-When confidence is LOW, provide a range instead of a single number.
+When confidence is MODERATE or LOW:
+  Provide a point estimate plus range (e.g., "3-4 checks, plus or minus 1").
+  State the reason for uncertainty.
+  Provide alternative counts under stricter or looser definitions where applicable.
 
-## OUTPUT FORMAT
 
-Generate your report in the following markdown structure:
+OUTPUT FORMAT
 
-# Coaching Report: {instructor_name}
+CRITICAL: Do not use any markup language in your response. No markdown, no HTML, \
+no asterisks for bold, no pound signs for headings, no pipe characters for tables, \
+no backticks, no bullet point characters. Use plain text only. Use line breaks and \
+indentation for structure. Use the exact section headers shown below (in all caps) \
+on their own line. Every section listed below is REQUIRED and must appear in your \
+response with complete content.
 
-## Executive Summary
+Your response must contain ALL of the following sections in this exact order. \
+Do not skip any section. Do not combine sections. Each section header must appear \
+on its own line exactly as shown.
+
+
+EXECUTIVE SUMMARY
+
 Write 3-4 sentences summarizing overall teaching effectiveness. Lead with the \
 strongest positive observation. Mention 1-2 key growth areas. End with an \
-encouraging forward-looking statement.
+encouraging forward-looking statement. Frame as developmental and growth-oriented. \
+Write this as a plain paragraph.
 
-## Strengths to Build On
-List 3-5 strengths with evidence. For each:
-- **Strength title**
-  - What was observed (with [HH:MM:SS] timestamp citation)
-  - Why this is effective (connect to adult learning principles)
-  - How to amplify this strength further
 
-## Growth Opportunities
-List 2-3 growth areas with evidence. For each:
-- **Growth area title**
-  - What was observed (with [HH:MM:SS] timestamp citation)
-  - Why this matters for adult learners
-  - Specific action to try: "In your next session, try..."
+STRENGTHS TO BUILD ON
 
-## Top 5 Prioritized Improvements
+List 3-5 strengths with evidence. You MUST include the full detail for EVERY \
+strength, not just the first one. Sample at least one strength from each segment \
+(A, B, C). For each strength, use this exact format:
+
+[number]. [Strength title]
+Why this is effective:
+[Write a full paragraph explaining why this is effective. Connect to specific \
+adult learning principles. Include a timestamp citation in MM:SS or HH:MM:SS \
+format showing where this was observed, labeled with its segment letter. Include \
+a brief direct quote from the transcript as evidence.]
+How to amplify:
+[Write a full paragraph with a concrete, immediately implementable suggestion \
+for how to build on this strength further.]
+
+Repeat this complete format for every single strength. Do not abbreviate or \
+shorten entries after the first one. Every strength must have the same level \
+of detail as the first.
+
+
+GROWTH OPPORTUNITIES
+
+List 2-3 growth areas with evidence. You MUST include the full detail for EVERY \
+growth opportunity, not just the first one. Sample at least one growth area from \
+each segment. For each growth area, use this exact format:
+
+[number]. [Growth area title]
+Why this matters:
+[Write a full paragraph explaining why this matters for adult learners. Connect \
+to adult learning principles and SME-to-teacher challenges. Include a timestamp \
+citation in MM:SS or HH:MM:SS format showing where this was observed, labeled \
+with its segment letter. Include a brief direct quote from the transcript as \
+evidence.]
+Specific action to try:
+[Write a full paragraph describing a specific, concrete action to try in the \
+next session. Start with a technique name, then explain step by step how to \
+implement it. Include alternative phrasing or approaches where useful. The \
+suggestion must be immediately actionable with less than 5 minutes of preparation.]
+
+Repeat this complete format for every single growth opportunity. Do not abbreviate \
+or shorten entries after the first one. Every growth opportunity must have the same \
+level of detail as the first.
+
+
+TOP 5 PRIORITIZED IMPROVEMENTS
+
 Rank the 5 most impactful changes {instructor_name} could make, from highest \
-to lowest impact. For each:
-1. **Improvement title**
-   - Current state (with evidence)
-   - Recommended change
-   - Expected impact on learner experience
-   - Difficulty to implement (Easy / Medium / Hard)
+to lowest impact. This section is REQUIRED and must contain exactly 5 items. \
+For each improvement, use this exact format:
 
-## Timestamped Moments to Review
-List 5-8 specific timestamps where {instructor_name} should re-watch their \
-session, with a brief note about what to observe:
-- [HH:MM:SS] — Brief description of what to notice
+[number]
+[One-sentence description of the recommended improvement]
+[One-sentence explanation of why this is ranked at this priority level, focusing \
+on the expected impact on learner outcomes.]
 
-## Metrics Snapshot
-Present all calculated metrics in a table:
+Repeat this complete format for all 5 improvements. Do not skip any.
 
-| Metric | Value | Target | Status | Confidence |
-|--------|-------|--------|--------|------------|
-| Speaking Pace (WPM) | X | 120-160 | ✅/⚠️/🔴 | HIGH/MOD/LOW |
-| Strategic Pauses (per 10 min) | X | 4-6 | ✅/⚠️/🔴 | HIGH/MOD/LOW |
-| Filler Words (per min) | X | <3 | ✅/⚠️/🔴 | HIGH/MOD/LOW |
-| Questions (per 5 min) | X | >1 | ✅/⚠️/🔴 | HIGH/MOD/LOW |
-| Tangent Time (%) | X% | <10% | ✅/⚠️/🔴 | HIGH/MOD/LOW |
 
-Show your calculation for each metric below the table.
+TIMESTAMPED MOMENTS TO REVIEW
 
-## Coaching Reflections
-Write 3 reflective questions for {instructor_name}:
-1. A question about their strongest moment
-2. A question about a growth opportunity
-3. A question about their goals for next session
+List 5-8 specific moments from the session that {instructor_name} should re-watch. \
+This section is REQUIRED and must contain at least 5 entries. Mix both exemplary \
+moments and moments to improve. Draw from all three segments. For each moment, \
+use this exact format:
 
-## Next Steps
-List 3 concrete actions for {instructor_name}'s next session:
-1. One thing to keep doing (strength to maintain)
-2. One thing to start doing (new technique to try)
-3. One thing to adjust (specific modification to current practice)
+[MM:SS] [Exemplary or Improve] [Brief context] [Description of what to notice \
+at this moment and why it matters. For Improve moments, include a suggested \
+reframe or alternative approach.]
 
----
-*Analysis generated by Adult Learning Coaching Agent*
-*Framework: 4-Dimension Instructional Coaching Model*
+Repeat this format for every moment. Include at least 5 entries.
 
-## TRANSCRIPT TO ANALYZE
+
+METRICS SNAPSHOT
+
+Present all calculated metrics in this exact format, one per line. This section \
+is REQUIRED.
+
+Speaking Pace: [value] WPM (Target: 120-160) [On Target or Near Target or Needs Focus] Confidence: [HIGH or MODERATE or LOW]
+Strategic Pauses: [value] per 10 min (Target: 4-6) [On Target or Near Target or Needs Focus] Confidence: [HIGH or MODERATE or LOW]
+Filler Words: [value] per min (Target: fewer than 3) [On Target or Near Target or Needs Focus] Confidence: [HIGH or MODERATE or LOW]
+Questions Asked: [value] per 5 min (Target: more than 1) [On Target or Near Target or Needs Focus] Confidence: [HIGH or MODERATE or LOW]
+Understanding Checks: [value] per hour (Target: 6-8) [On Target or Near Target or Needs Focus] Confidence: [HIGH or MODERATE or LOW]
+Tangent Time: [value]% (Target: less than 10%) [On Target or Near Target or Needs Focus] Confidence: [HIGH or MODERATE or LOW]
+Curse of Knowledge Instances: [value] total [On Target or Near Target or Needs Focus] Confidence: [HIGH or MODERATE or LOW]
+
+After listing all metrics, show the full calculation for each metric with the \
+formula, the numbers, and the result. For metrics with MODERATE or LOW confidence, \
+include the uncertainty range and reason.
+
+
+COACHING REFLECTIONS
+
+Write exactly 3 reflective questions for {instructor_name}. This section is \
+REQUIRED. Use this exact format:
+
+1. [A reflective question about their strongest moment in this session]
+2. [A reflective question about a specific growth opportunity]
+3. [A reflective question about their goals for the next session]
+
+Each question must be a complete, thoughtful question that prompts genuine \
+self-reflection. Do not use generic questions. Ground each question in specific \
+observations from this session.
+
+
+NEXT STEPS
+
+List exactly 3 concrete actions for {instructor_name}'s next session. This \
+section is REQUIRED. Use this exact format:
+
+1. Keep doing: [specific strength to maintain, with brief explanation of why \
+it works and how to sustain it]
+2. Start doing: [specific new technique to try, with step-by-step implementation \
+guidance that requires less than 5 minutes of preparation]
+3. Adjust: [specific modification to current practice, with brief explanation \
+of the change and expected impact]
+
+
+TRANSCRIPT TO ANALYZE
 
 {transcript}"""
 

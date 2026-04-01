@@ -334,7 +334,7 @@ class PDFReportGenerator:
             spaceAfter=16, spaceBefore=4,
         ))
 
-        # --- Section 1: Your Strengths ---
+        # --- Section 1: Your Strengths (with full content) ---
         story.append(Paragraph("Your Strengths", self.styles["h2"]))
         story.append(Paragraph(
             "These are the things you're doing well. Reflect on how you "
@@ -344,14 +344,61 @@ class PDFReportGenerator:
 
         for i, strength in enumerate(strengths or [], 1):
             title = strength.get("title", f"Strength {i}")
-            story.append(Paragraph(
+            text = strength.get("text", "")
+
+            elements = []
+            elements.append(Paragraph(
                 f"<b>{i}. {self._safe(title)}</b>",
                 self.styles["strength_title"],
             ))
-            # Add lined space for notes
-            self._add_lined_space(story, lines=3)
 
-        # --- Section 2: Growth Opportunities ---
+            # Render body text with labeled sub-sections
+            if text:
+                for line in text.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # Detect sub-labels like "Why this is effective:" and
+                    # "How to amplify:" and render them with emphasis
+                    if line.lower().startswith("why this is effective:"):
+                        label = "Why this is effective:"
+                        rest = line[len(label):].strip()
+                        elements.append(Paragraph(
+                            f"<b>{label}</b>",
+                            self.styles["body"],
+                        ))
+                        if rest:
+                            elements.append(Paragraph(
+                                self._safe(rest),
+                                self.styles["sub_bullet"],
+                            ))
+                    elif line.lower().startswith("how to amplify:"):
+                        label = "How to amplify:"
+                        rest = line[len(label):].strip()
+                        elements.append(Paragraph(
+                            f"<b>{label}</b>",
+                            self.styles["body"],
+                        ))
+                        if rest:
+                            elements.append(Paragraph(
+                                self._safe(rest),
+                                self.styles["sub_bullet"],
+                            ))
+                    elif line.startswith("- ") or line.startswith("• "):
+                        elements.append(Paragraph(
+                            self._safe(line[2:]),
+                            self.styles["sub_bullet"],
+                        ))
+                    else:
+                        elements.append(Paragraph(
+                            self._safe(line),
+                            self.styles["sub_bullet"],
+                        ))
+
+            elements.append(Spacer(1, 6))
+            story.append(KeepTogether(elements))
+
+        # --- Section 2: Growth Opportunities (with full content) ---
         story.append(Spacer(1, 0.2 * inch))
         story.append(Paragraph("Growth Opportunities", self.styles["h2"]))
         story.append(Paragraph(
@@ -363,17 +410,70 @@ class PDFReportGenerator:
 
         for i, growth in enumerate(growth_opportunities or [], 1):
             title = growth.get("title", f"Growth Area {i}")
-            story.append(Paragraph(
+            text = growth.get("text", "")
+
+            elements = []
+            elements.append(Paragraph(
                 f"<b>{i}. {self._safe(title)}</b>",
                 self.styles["growth_title"],
             ))
-            story.append(Paragraph(
-                "What I'll try next time:",
+
+            # Render body text with labeled sub-sections
+            if text:
+                for line in text.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.lower().startswith("why this matters:"):
+                        label = "Why this matters:"
+                        rest = line[len(label):].strip()
+                        elements.append(Paragraph(
+                            f"<b>{label}</b>",
+                            self.styles["body"],
+                        ))
+                        if rest:
+                            elements.append(Paragraph(
+                                self._safe(rest),
+                                self.styles["sub_bullet"],
+                            ))
+                    elif line.lower().startswith("specific action to try:"):
+                        label = "Specific action to try:"
+                        rest = line[len(label):].strip()
+                        elements.append(Paragraph(
+                            f"<b>{label}</b>",
+                            self.styles["body"],
+                        ))
+                        if rest:
+                            elements.append(Paragraph(
+                                self._safe(rest),
+                                self.styles["sub_bullet"],
+                            ))
+                    elif line.startswith("- ") or line.startswith("• "):
+                        elements.append(Paragraph(
+                            self._safe(line[2:]),
+                            self.styles["sub_bullet"],
+                        ))
+                    else:
+                        elements.append(Paragraph(
+                            self._safe(line),
+                            self.styles["sub_bullet"],
+                        ))
+
+            elements.append(Paragraph(
+                "<b>What I'll try next time:</b>",
                 self.styles["body"],
             ))
+            story.append(KeepTogether(elements))
             self._add_lined_space(story, lines=3)
 
-        # --- Section 3: Coaching Reflections ---
+        # --- Section 3: Top 5 Prioritized Improvements ---
+        story.append(PageBreak())
+        self._render_prioritized_improvements(story, report_markdown)
+
+        # --- Section 4: Timestamped Moments to Review ---
+        self._render_timestamped_moments(story, report_markdown)
+
+        # --- Section 5: Coaching Reflections ---
         story.append(PageBreak())
         story.append(Paragraph("Coaching Reflections", self.styles["h2"]))
 
@@ -381,7 +481,7 @@ class PDFReportGenerator:
         if reflections:
             for i, question in enumerate(reflections, 1):
                 story.append(Paragraph(
-                    f"<b>Question {i}:</b> {self._safe(question)}",
+                    self._safe(question),
                     self.styles["body"],
                 ))
                 self._add_lined_space(story, lines=5)
@@ -390,18 +490,18 @@ class PDFReportGenerator:
             for question in [
                 "What moment in this session are you most proud of? Why?",
                 "If you could re-teach one segment, what would you change?",
-                "What is one goal you'll set for your next session?",
+                "What is one goal you will set for your next session?",
             ]:
                 story.append(Paragraph(
-                    f"<b>Reflect:</b> {question}",
+                    question,
                     self.styles["body"],
                 ))
                 self._add_lined_space(story, lines=5)
 
-        # --- Section 4: My Action Plan ---
+        # --- Section 6: My Action Plan ---
         story.append(Paragraph("My Action Plan", self.styles["h2"]))
         story.append(Paragraph(
-            "Write 1-3 concrete actions you'll take before your next session.",
+            "Write 1-3 concrete actions you will take before your next session.",
             self.styles["body_italic"],
         ))
 
@@ -592,30 +692,58 @@ class PDFReportGenerator:
         if not section:
             return
 
-        # Parse numbered items: "1. **Title**\n   - bullet..."
-        # Use findall instead of split to capture both number and title reliably
-        item_pattern = r'(\d+)\.\s+\*\*(.+?)\*\*\s*\n(.*?)(?=\n\d+\.\s+\*\*|\Z)'
-        matches = re.findall(item_pattern, section, re.DOTALL)
+        # Try new plain-text format: "1\nDescription\nReason\n"
+        # Each item is a number on its own line followed by description lines
+        new_format = re.findall(
+            r'(\d+)\n(.+?)(?=\n\d+\n|\Z)',
+            section, re.DOTALL,
+        )
 
-        for num, title, body in matches:
-            bullets = [b.strip().lstrip("- ") for b in body.strip().split("\n")
-                       if b.strip().startswith("-")]
+        if new_format:
+            for num, body in new_format:
+                lines = [l.strip() for l in body.strip().split("\n") if l.strip()]
+                if not lines:
+                    continue
 
-            elements = []
-            elements.append(Paragraph(
-                f"<font color='{BRAND_SECONDARY.hexval()}'><b>{num}.</b></font> "
-                f"<b>{self._safe(title.strip())}</b>",
-                self.styles["h3"],
-            ))
-
-            for bullet in bullets:
+                elements = []
                 elements.append(Paragraph(
-                    f"• {self._safe(bullet)}",
-                    self.styles["sub_bullet"],
+                    f"<font color='{BRAND_SECONDARY.hexval()}'><b>{num}.</b></font> "
+                    f"<b>{self._safe(lines[0])}</b>",
+                    self.styles["h3"],
                 ))
 
-            elements.append(Spacer(1, 4))
-            story.append(KeepTogether(elements))
+                for line in lines[1:]:
+                    elements.append(Paragraph(
+                        self._safe(line),
+                        self.styles["sub_bullet"],
+                    ))
+
+                elements.append(Spacer(1, 4))
+                story.append(KeepTogether(elements))
+        else:
+            # Fallback: legacy markdown "1. **Title**\n   - bullet..."
+            item_pattern = r'(\d+)\.\s+\*\*(.+?)\*\*\s*\n(.*?)(?=\n\d+\.\s+\*\*|\Z)'
+            matches = re.findall(item_pattern, section, re.DOTALL)
+
+            for num, title, body in matches:
+                bullets = [b.strip().lstrip("- ") for b in body.strip().split("\n")
+                           if b.strip().startswith("-")]
+
+                elements = []
+                elements.append(Paragraph(
+                    f"<font color='{BRAND_SECONDARY.hexval()}'><b>{num}.</b></font> "
+                    f"<b>{self._safe(title.strip())}</b>",
+                    self.styles["h3"],
+                ))
+
+                for bullet in bullets:
+                    elements.append(Paragraph(
+                        f"• {self._safe(bullet)}",
+                        self.styles["sub_bullet"],
+                    ))
+
+                elements.append(Spacer(1, 4))
+                story.append(KeepTogether(elements))
 
     def _render_timestamped_moments(self, story: list, markdown: str):
         """Render the Timestamped Moments to Review section."""
@@ -629,32 +757,49 @@ class PDFReportGenerator:
         if not section:
             return
 
-        # Parse "- [HH:MM:SS] — Description" lines
-        moment_pattern = r'-\s*\[(\d{2}:\d{2}:\d{2})\]\s*[—–-]\s*(.+)'
-        moments = re.findall(moment_pattern, section)
+        # New format: "MM:SS Exemplary/Improve Description..."
+        # Legacy format: "- [HH:MM:SS] — Description"
+        new_moments = re.findall(
+            r'(\d{1,2}:\d{2}(?::\d{2})?)\s+(Exemplary|Improve)\s+(.+)',
+            section,
+        )
 
-        if moments:
-            # Build a clean table of timestamps
+        if new_moments:
+            table_data = [["Time", "Type", "What to Notice"]]
+            for ts, moment_type, desc in new_moments:
+                table_data.append([ts, moment_type, desc.strip()])
+
+            col_widths = [0.8 * inch, 0.9 * inch, 4.7 * inch]
+            table = Table(table_data, colWidths=col_widths)
+        else:
+            # Fallback: legacy markdown format
+            moment_pattern = r'-?\s*\[?(\d{1,2}:\d{2}(?::\d{2})?)\]?\s*[—–-]\s*(.+)'
+            moments = re.findall(moment_pattern, section)
+            if not moments:
+                return
+
             table_data = [["Timestamp", "What to Notice"]]
             for ts, desc in moments:
                 table_data.append([ts, desc.strip()])
 
-            table = Table(table_data, colWidths=[1.2 * inch, 5.2 * inch])
-            table.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), BRAND_SECONDARY),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), 9),
-                ("ALIGN", (0, 0), (0, -1), "CENTER"),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                *[("BACKGROUND", (0, i), (-1, i), BRAND_LIGHT_BG)
-                  for i in range(2, len(table_data), 2)],
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
-                ("LINEBELOW", (0, 0), (-1, 0), 2, BRAND_SECONDARY),
-            ]))
-            story.append(table)
+            col_widths = [1.2 * inch, 5.2 * inch]
+            table = Table(table_data, colWidths=col_widths)
+
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), BRAND_SECONDARY),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ALIGN", (0, 0), (0, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            *[("BACKGROUND", (0, i), (-1, i), BRAND_LIGHT_BG)
+              for i in range(2, len(table_data), 2)],
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+            ("LINEBELOW", (0, 0), (-1, 0), 2, BRAND_SECONDARY),
+        ]))
+        story.append(table)
 
     def _render_reflections_and_next_steps(self, story: list, markdown: str):
         """Render Coaching Reflections and Next Steps sections."""
@@ -678,27 +823,55 @@ class PDFReportGenerator:
             # Strip trailing markdown footer (--- and *text*)
             next_steps = re.sub(r'\n---.*', '', next_steps, flags=re.DOTALL)
 
-            # Parse numbered items with bold titles
-            steps = re.findall(
-                r'\d+\.\s+\*\*(.+?)\*\*:?\s*(.*?)(?=\n\d+\.|\Z)',
+            # Try new format: "1. Keep doing: description"
+            new_steps = re.findall(
+                r'\d+\.\s+([^:\n]+):\s*(.*?)(?=\n\d+\.|\Z)',
                 next_steps, re.DOTALL,
             )
-            for title, body in steps:
-                # Remove trailing colon from title (Claude formats "One thing to keep doing:")
-                clean_title = title.rstrip(":")
-                clean_body = body.strip()
-                story.append(Paragraph(
-                    f"<b>{self._safe(clean_title)}:</b> {self._safe(clean_body)}",
-                    self.styles["bullet"],
-                ))
-                story.append(Spacer(1, 4))
+
+            if new_steps:
+                for title, body in new_steps:
+                    clean_body = body.strip()
+                    story.append(Paragraph(
+                        f"<b>{self._safe(title.strip())}:</b> "
+                        f"{self._safe(clean_body)}",
+                        self.styles["bullet"],
+                    ))
+                    story.append(Spacer(1, 4))
+            else:
+                # Fallback: legacy markdown "1. **Title**: body"
+                steps = re.findall(
+                    r'\d+\.\s+\*\*(.+?)\*\*:?\s*(.*?)(?=\n\d+\.|\Z)',
+                    next_steps, re.DOTALL,
+                )
+                for title, body in steps:
+                    clean_title = title.rstrip(":")
+                    clean_body = body.strip()
+                    story.append(Paragraph(
+                        f"<b>{self._safe(clean_title)}:</b> "
+                        f"{self._safe(clean_body)}",
+                        self.styles["bullet"],
+                    ))
+                    story.append(Spacer(1, 4))
 
     # ------------------------------------------------------------------
     # HELPERS
     # ------------------------------------------------------------------
 
     def _extract_section(self, markdown: str, heading: str) -> str:
-        """Extract text content between a ## heading and the next ## heading."""
+        """Extract text content under a section heading.
+
+        Supports both the new plain-text ALL CAPS headers and
+        the legacy markdown ## headings.
+        """
+        # Try new plain-text format: ALL CAPS heading on its own line
+        caps_heading = heading.upper()
+        pattern = rf'^{re.escape(caps_heading)}\s*\n(.*?)(?=\n[A-Z][A-Z ]{{5,}}\s*$|\Z)'
+        match = re.search(pattern, markdown, re.DOTALL | re.MULTILINE)
+        if match:
+            return match.group(1).strip()
+
+        # Fallback: legacy markdown format
         pattern = rf'##\s+{re.escape(heading)}\s*\n(.*?)(?=\n##\s|\Z)'
         match = re.search(pattern, markdown, re.DOTALL)
         return match.group(1).strip() if match else ""
@@ -709,9 +882,10 @@ class PDFReportGenerator:
         if not section:
             return []
 
-        # Pattern: "1. **Title:** Question text"
+        # New format: "1. Question text" (plain text, no bold)
+        # Legacy format: "1. **Title:** Question text"
         questions = re.findall(
-            r'\d+\.\s+\*\*.*?\*\*:?\s*(.*?)(?=\n\d+\.|\Z)',
+            r'\d+\.\s+(?:\*\*.*?\*\*:?\s*)?(.*?)(?=\n\d+\.|\Z)',
             section, re.DOTALL,
         )
         return [q.strip() for q in questions if q.strip()]
