@@ -221,15 +221,23 @@ class PDFReportGenerator:
         self,
         report_markdown: str,
         instructor_name: str = "Instructor",
+        class_name: Optional[str] = None,
         metrics: Optional[dict] = None,
         strengths: Optional[list] = None,
         growth_opportunities: Optional[list] = None,
+        coaching_data: Optional[dict] = None,
     ) -> bytes:
         """Generate the full coaching report PDF.
 
-        Parses the markdown report and renders each section into
-        styled PDF elements. Returns raw PDF bytes (ready to save
-        to disk or stream via HTTP).
+        When coaching_data (the parsed JSON from Claude) is provided, ALL
+        sections render from structured data — no markdown parsing needed.
+        This is the primary path for new evaluations and eliminates the
+        empty-section bug where markdown parsers fail on JSON strings.
+
+        Falls back to legacy markdown parsing when coaching_data is absent
+        (backward compatibility with older evaluation records).
+
+        Returns raw PDF bytes (ready to save to disk or stream via HTTP).
         """
         buffer = BytesIO()
 
@@ -250,8 +258,21 @@ class PDFReportGenerator:
 
         # --- Title Page Content ---
         story.append(Spacer(1, 0.5 * inch))
-        story.append(Paragraph(f"Coaching Report", self.styles["title"]))
-        story.append(Paragraph(instructor_name, self.styles["h2"]))
+        # Title order: Class Name first (identifier), then Instructor Name
+        if class_name:
+            story.append(Paragraph(
+                self._safe(class_name) + ": Coaching Report",
+                self.styles["title"],
+            ))
+            story.append(Paragraph(
+                self._safe(instructor_name),
+                self.styles["h2"],
+            ))
+        else:
+            story.append(Paragraph(
+                self._safe(instructor_name) + ": Coaching Report",
+                self.styles["title"],
+            ))
         story.append(Paragraph(
             f"Generated {datetime.now().strftime('%B %d, %Y')}",
             self.styles["subtitle"],
@@ -261,17 +282,33 @@ class PDFReportGenerator:
             spaceAfter=12, spaceBefore=4,
         ))
 
-        # --- Parse and render each section ---
-        self._render_executive_summary(story, report_markdown)
-        self._render_metrics_table(story, metrics or {})
-        story.append(PageBreak())
-        self._render_strengths(story, report_markdown, strengths or [])
-        self._render_growth_opportunities(story, report_markdown, growth_opportunities or [])
-        story.append(PageBreak())
-        self._render_prioritized_improvements(story, report_markdown)
-        self._render_timestamped_moments(story, report_markdown)
-        story.append(PageBreak())
-        self._render_reflections_and_next_steps(story, report_markdown)
+        # --- Render each section ---
+        # When coaching_data is available, use it as the authoritative source
+        # for ALL sections. Fall back to markdown parsing for legacy records.
+        if coaching_data:
+            self._render_executive_summary_from_json(story, coaching_data)
+            self._render_metrics_table(story, coaching_data.get("metrics", {}))
+            story.append(PageBreak())
+            self._render_strengths_from_json(story, coaching_data)
+            self._render_growth_opportunities_from_json(story, coaching_data)
+            story.append(PageBreak())
+            self._render_prioritized_improvements_from_json(story, coaching_data)
+            self._render_timestamped_moments_from_json(story, coaching_data)
+            story.append(PageBreak())
+            self._render_reflections_from_json(story, coaching_data)
+            self._render_next_steps_from_json(story, coaching_data)
+        else:
+            # Legacy path: parse from markdown/raw text
+            self._render_executive_summary(story, report_markdown)
+            self._render_metrics_table(story, metrics or {})
+            story.append(PageBreak())
+            self._render_strengths(story, report_markdown, strengths or [])
+            self._render_growth_opportunities(story, report_markdown, growth_opportunities or [])
+            story.append(PageBreak())
+            self._render_prioritized_improvements(story, report_markdown)
+            self._render_timestamped_moments(story, report_markdown)
+            story.append(PageBreak())
+            self._render_reflections_and_next_steps(story, report_markdown)
 
         # --- Footer ---
         story.append(Spacer(1, 0.3 * inch))
@@ -294,139 +331,678 @@ class PDFReportGenerator:
     def generate_reflection_worksheet(
         self,
         instructor_name: str = "Instructor",
+        class_name: Optional[str] = None,
         strengths: Optional[list] = None,
         growth_opportunities: Optional[list] = None,
         report_markdown: str = "",
+        coaching_data: Optional[dict] = None,
     ) -> bytes:
         """Generate the reflection worksheet PDF.
 
-        This is a shorter, action-oriented document that instructors
-        use for self-reflection and planning. It includes:
-        - Key strengths to maintain
-        - Growth areas with action prompts
-        - Reflective questions
-        - Blank space for written responses
+        When coaching_data (the parsed JSON from Claude) is provided, it is
+        used as the authoritative source for all sections — no markdown parsing,
+        no missing sections, no markdown bleed-through.
+
+        Falls back to the legacy path when coaching_data is not available
+        (backward compatibility with older evaluation records).
         """
+        if coaching_data:
+            return self._generate_worksheet_from_json(coaching_data, class_name)
+        return self._generate_worksheet_legacy(
+            instructor_name, class_name, strengths, growth_opportunities, report_markdown
+        )
+
+    def _generate_worksheet_from_json(
+        self,
+        data: dict,
+        class_name: Optional[str] = None,
+    ) -> bytes:
+        """Render the worksheet entirely from the structured JSON coaching_data dict.
+
+        This is the primary path for all new evaluations. Every section maps
+        directly to a key in the JSON — no regex, no markdown parsing.
+        """
+        # Extra colors needed for the new sections
+        COLOR_RULE  = colors.HexColor("#CBD5E0")
+        COLOR_RANK  = colors.HexColor("#C05621")
+        COLOR_TS    = colors.HexColor("#276749")
+
+        base = getSampleStyleSheet()
+
+        def s(name, **kw):
+            return ParagraphStyle(name, parent=base["Normal"], **kw)
+
+        st = {
+            "doc_title":  s("ws_doc_title",  fontName="Helvetica-Bold", fontSize=20,
+                            textColor=BRAND_PRIMARY, alignment=TA_CENTER, spaceAfter=4),
+            "doc_sub":    s("ws_doc_sub",    fontName="Helvetica", fontSize=11,
+                            textColor=BRAND_MUTED, alignment=TA_CENTER, spaceAfter=16),
+            "sec_hdr":    s("ws_sec_hdr",    fontName="Helvetica-Bold", fontSize=13,
+                            textColor=colors.white, leftIndent=8, spaceBefore=14, spaceAfter=8),
+            "sec_desc":   s("ws_sec_desc",   fontName="Helvetica-Oblique", fontSize=9,
+                            textColor=BRAND_MUTED, spaceAfter=8),
+            "item_title": s("ws_item_title", fontName="Helvetica-Bold", fontSize=11,
+                            textColor=BRAND_SECONDARY, spaceBefore=10, spaceAfter=3),
+            "sub_label":  s("ws_sub_label",  fontName="Helvetica-Bold", fontSize=9,
+                            textColor=BRAND_MUTED, spaceAfter=2),
+            "body":       s("ws_body",       fontName="Helvetica", fontSize=9.5,
+                            textColor=BRAND_TEXT, leading=14, spaceAfter=6),
+            "ts":         s("ws_ts",         fontName="Helvetica-Bold", fontSize=9,
+                            textColor=COLOR_TS, spaceAfter=1),
+            "rank":       s("ws_rank",       fontName="Helvetica-Bold", fontSize=22,
+                            textColor=COLOR_RANK, alignment=TA_CENTER),
+            "reflect":    s("ws_reflect",    fontName="Helvetica-Oblique", fontSize=10,
+                            textColor=BRAND_PRIMARY, spaceAfter=4),
+            "action_lbl": s("ws_action_lbl", fontName="Helvetica-Bold", fontSize=10,
+                            textColor=BRAND_SECONDARY, spaceAfter=2),
+            "footer":     s("ws_footer",     fontName="Helvetica-Oblique", fontSize=8,
+                            textColor=BRAND_MUTED, alignment=TA_CENTER),
+        }
+
+        def banner(title):
+            """Navy section header banner."""
+            p = Paragraph(title.upper(), st["sec_hdr"])
+            t = Table([[p]], colWidths=[7.0 * inch])
+            t.setStyle(TableStyle([
+                ("BACKGROUND",    (0, 0), (-1, -1), BRAND_PRIMARY),
+                ("TOPPADDING",    (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("LEFTPADDING",   (0, 0), (-1, -1), 10),
+                ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
+            ]))
+            return t
+
+        def dotted_lines(n=3):
+            return [HRFlowable(width="100%", thickness=0.5, color=COLOR_RULE,
+                               spaceAfter=14, spaceBefore=2, dash=(2, 4))
+                    for _ in range(n)]
+
+        def thin_rule():
+            return HRFlowable(width="100%", thickness=0.5, color=COLOR_RULE,
+                              spaceBefore=6, spaceAfter=6)
+
         buffer = BytesIO()
+        topic = class_name or data.get("session_topic", "")
+        name  = data.get("instructor_name", "Instructor")
+        date  = data.get("session_date", datetime.now().strftime("%B %d, %Y"))
 
         doc = SimpleDocTemplate(
-            buffer,
-            pagesize=letter,
-            topMargin=0.75 * inch,
-            bottomMargin=0.75 * inch,
-            leftMargin=0.75 * inch,
-            rightMargin=0.75 * inch,
-            title=f"Reflection Worksheet - {instructor_name}",
+            buffer, pagesize=letter,
+            leftMargin=0.75 * inch, rightMargin=0.75 * inch,
+            topMargin=0.75 * inch,  bottomMargin=0.75 * inch,
+            title=f"Reflection Worksheet - {name}",
             author="Adult Learning Coaching Agent",
         )
 
         story = []
 
-        # --- Title ---
-        story.append(Paragraph("Reflection Worksheet", self.styles["title"]))
-        story.append(Paragraph(instructor_name, self.styles["h2"]))
+        # ---- Header ----
+        story.append(Paragraph("Reflection Worksheet", st["doc_title"]))
         story.append(Paragraph(
-            f"Session reviewed: {datetime.now().strftime('%B %d, %Y')}",
-            self.styles["subtitle"],
+            f"{self._safe(topic)}  |  {self._safe(name)}  |  {self._safe(date)}",
+            st["doc_sub"]
         ))
-        story.append(HRFlowable(
-            width="100%", thickness=2, color=BRAND_PRIMARY,
-            spaceAfter=16, spaceBefore=4,
+        story.append(HRFlowable(width="100%", thickness=2, color=BRAND_PRIMARY, spaceAfter=12))
+
+        # ---- Strengths ----
+        story.append(banner("Your Strengths"))
+        story.append(Paragraph(
+            "These are the things you're doing well. Reflect on how you can continue "
+            "to build on these strengths.",
+            st["sec_desc"]
+        ))
+        for item in data.get("strengths", []):
+            block = [
+                Paragraph(f"{item['number']}.  {self._safe(item['title'])}", st["item_title"]),
+                Paragraph("Why this is effective:", st["sub_label"]),
+                Paragraph(self._safe(item.get("why_effective", "")), st["body"]),
+                Paragraph("How to amplify:", st["sub_label"]),
+                Paragraph(self._safe(item.get("how_to_amplify", "")), st["body"]),
+                thin_rule(),
+            ]
+            story.append(KeepTogether(block))
+
+        # ---- Growth Opportunities ----
+        story.append(banner("Growth Opportunities"))
+        story.append(Paragraph(
+            "These are areas where small changes can make a big impact. "
+            "For each one, write down one specific thing you'll try in your next session.",
+            st["sec_desc"]
+        ))
+        for item in data.get("growth_opportunities", []):
+            block = [
+                Paragraph(f"{item['number']}.  {self._safe(item['title'])}", st["item_title"]),
+                Paragraph("Why this matters:", st["sub_label"]),
+                Paragraph(self._safe(item.get("why_it_matters", "")), st["body"]),
+                Paragraph("Specific action to try:", st["sub_label"]),
+                Paragraph(self._safe(item.get("specific_action", "")), st["body"]),
+                Paragraph("What I'll try next time:", st["sub_label"]),
+            ] + dotted_lines(2) + [thin_rule()]
+            story.append(KeepTogether(block))
+
+        # ---- Top 5 Prioritized Improvements ----
+        story.append(banner("Top 5 Prioritized Improvements"))
+        story.append(Paragraph(
+            "Ranked by potential impact on learner outcomes. Start with Rank 1.",
+            st["sec_desc"]
+        ))
+        for item in data.get("top_5_improvements", []):
+            rank_cell = Paragraph(str(item.get("rank", "")), st["rank"])
+            # Support both new format (title/observation/suggestions) and
+            # legacy format (improvement/rationale)
+            main_text = item.get("title", "") or item.get("improvement", "")
+            sub_text = item.get("observation", "") or item.get("rationale", "")
+            if item.get("suggestions"):
+                sub_text += f" {item['suggestions']}" if sub_text else item["suggestions"]
+            inner = Table(
+                [[Paragraph(self._safe(main_text), st["body"])],
+                 [Paragraph(self._safe(sub_text), st["sec_desc"])]],
+                colWidths=[5.8 * inch]
+            )
+            inner.setStyle(TableStyle([
+                ("TOPPADDING",    (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+            ]))
+            row = Table([[rank_cell, inner]], colWidths=[0.7 * inch, 6.0 * inch])
+            row.setStyle(TableStyle([
+                ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+                ("BACKGROUND",    (0, 0), (0,  0),  BRAND_LIGHT_BG),
+                ("TOPPADDING",    (0, 0), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
+                ("BOX",           (0, 0), (-1, -1), 0.5, COLOR_RULE),
+                ("LINEAFTER",     (0, 0), (0,  -1), 0.5, COLOR_RULE),
+            ]))
+            story.append(KeepTogether([row, Spacer(1, 6)]))
+
+        # ---- Timestamped Moments ----
+        story.append(banner("Timestamped Moments to Review"))
+        story.append(Paragraph(
+            "Key moments from this session — both exemplary practices and areas to revisit.",
+            st["sec_desc"]
+        ))
+        for moment in data.get("timestamped_moments", []):
+            ts_p  = Paragraph(self._safe(moment.get("timestamp", "")), st["ts"])
+            # Support both new format (type/coaching_note) and legacy (label/note)
+            moment_type = moment.get("type", "")
+            label = moment.get("label", "")
+            coaching_note = moment.get("coaching_note", "")
+            note = moment.get("note", "")
+            context = moment.get("context", "")
+            display_label = moment_type or label
+            display_note = coaching_note or note or context
+            lbl_p = Paragraph(
+                f"<b>{self._safe(display_label)}</b>  "
+                f"{self._safe(display_note)}",
+                st["body"]
+            )
+            row = Table([[ts_p, lbl_p]], colWidths=[0.85 * inch, 5.85 * inch])
+            row.setStyle(TableStyle([
+                ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING",    (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
+                ("LINEBELOW",     (0, 0), (-1, -1), 0.5, COLOR_RULE),
+            ]))
+            story.append(row)
+        story.append(Spacer(1, 8))
+
+        # ---- Coaching Reflections ----
+        story.append(banner("Coaching Reflections"))
+        reflections = data.get("coaching_reflections", [])
+        if isinstance(reflections, list):
+            # New format: list of reflective question strings
+            for prompt_text in reflections:
+                story.append(KeepTogether(
+                    [Paragraph(self._safe(prompt_text), st["reflect"])] + dotted_lines(3)
+                ))
+                story.append(Spacer(1, 4))
+        elif isinstance(reflections, dict):
+            # Legacy format: dict with named prompt keys
+            for prompt_text in [
+                reflections.get("proud_moment_prompt",      "What moment in this session are you most proud of? Why?"),
+                reflections.get("reteach_prompt",           "If you could re-teach one segment, what would you change?"),
+                reflections.get("next_session_goal_prompt", "What is one goal you will set for your next session?"),
+            ]:
+                story.append(KeepTogether(
+                    [Paragraph(self._safe(prompt_text), st["reflect"])] + dotted_lines(3)
+                ))
+                story.append(Spacer(1, 4))
+
+        # ---- Action Plan / Next Steps ----
+        next_steps = data.get("next_steps", {})
+        ap = data.get("action_plan", {})
+
+        if isinstance(next_steps, dict) and next_steps:
+            # New format: keep_doing / start_doing / adjust
+            story.append(banner("Next Steps"))
+            story.append(Paragraph(
+                "Three concrete actions for your next session.",
+                st["sec_desc"]
+            ))
+            labels = [
+                ("keep_doing", "Keep doing"),
+                ("start_doing", "Start doing"),
+                ("adjust", "Adjust"),
+            ]
+            for key, label in labels:
+                value = next_steps.get(key, "")
+                story.append(KeepTogether([
+                    Paragraph(self._safe(label), st["action_lbl"]),
+                    Paragraph(self._safe(value), st["body"]) if value else Spacer(1, 1),
+                ] + dotted_lines(2)))
+                story.append(Spacer(1, 4))
+        elif ap:
+            # Legacy format: action_plan with numbered labels
+            story.append(banner("My Action Plan"))
+            story.append(Paragraph(
+                self._safe(ap.get("instructions", "Write 1-3 concrete actions you will take before your next session.")),
+                st["sec_desc"]
+            ))
+            for key in ["action_1_label", "action_2_label", "action_3_label"]:
+                story.append(KeepTogether(
+                    [Paragraph(self._safe(ap.get(key, "Action:")), st["action_lbl"])] + dotted_lines(2)
+                ))
+                story.append(Spacer(1, 4))
+
+        # ---- Footer ----
+        story.append(Spacer(1, 16))
+        story.append(HRFlowable(width="100%", thickness=1, color=BRAND_PRIMARY))
+        story.append(Spacer(1, 4))
+        story.append(Paragraph(
+            "Adult Learning Coaching Agent  •  Reflection Worksheet",
+            st["footer"]
         ))
 
-        # --- Section 1: Your Strengths ---
+        doc.build(story, onFirstPage=self._add_page_number, onLaterPages=self._add_page_number)
+        return buffer.getvalue()
+
+    def _generate_worksheet_legacy(
+        self,
+        instructor_name: str = "Instructor",
+        class_name: Optional[str] = None,
+        strengths: Optional[list] = None,
+        growth_opportunities: Optional[list] = None,
+        report_markdown: str = "",
+    ) -> bytes:
+        """Legacy worksheet renderer — used only when coaching_data is unavailable.
+
+        Kept for backward compatibility with older evaluation records stored
+        as raw markdown rather than structured JSON.
+        """
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(
+            buffer, pagesize=letter,
+            topMargin=0.75 * inch, bottomMargin=0.75 * inch,
+            leftMargin=0.75 * inch, rightMargin=0.75 * inch,
+            title=f"Reflection Worksheet - {instructor_name}",
+            author="Adult Learning Coaching Agent",
+        )
+        story = []
+
+        if class_name:
+            story.append(Paragraph(self._safe(class_name) + ": Reflection Worksheet", self.styles["title"]))
+            story.append(Paragraph(self._safe(instructor_name), self.styles["h2"]))
+        else:
+            story.append(Paragraph(self._safe(instructor_name) + ": Reflection Worksheet", self.styles["title"]))
+        story.append(Paragraph(f"Session reviewed: {datetime.now().strftime('%B %d, %Y')}", self.styles["subtitle"]))
+        story.append(HRFlowable(width="100%", thickness=2, color=BRAND_PRIMARY, spaceAfter=16, spaceBefore=4))
+
         story.append(Paragraph("Your Strengths", self.styles["h2"]))
         story.append(Paragraph(
-            "These are the things you're doing well. Reflect on how you "
-            "can continue to build on these strengths.",
+            "These are the things you're doing well. Reflect on how you can continue to build on these strengths.",
             self.styles["body_italic"],
         ))
-
         for i, strength in enumerate(strengths or [], 1):
-            title = strength.get("title", f"Strength {i}")
-            story.append(Paragraph(
-                f"<b>{i}. {self._safe(title)}</b>",
-                self.styles["strength_title"],
-            ))
-            # Add lined space for notes
+            story.append(Paragraph(f"<b>{i}. {self._safe(strength.get('title', f'Strength {i}'))}</b>", self.styles["strength_title"]))
             self._add_lined_space(story, lines=3)
 
-        # --- Section 2: Growth Opportunities ---
         story.append(Spacer(1, 0.2 * inch))
         story.append(Paragraph("Growth Opportunities", self.styles["h2"]))
         story.append(Paragraph(
             "These are areas where small changes can make a big impact. "
-            "For each one, write down one specific thing you'll try in "
-            "your next session.",
+            "For each one, write down one specific thing you'll try in your next session.",
             self.styles["body_italic"],
         ))
-
         for i, growth in enumerate(growth_opportunities or [], 1):
-            title = growth.get("title", f"Growth Area {i}")
-            story.append(Paragraph(
-                f"<b>{i}. {self._safe(title)}</b>",
-                self.styles["growth_title"],
-            ))
-            story.append(Paragraph(
-                "What I'll try next time:",
-                self.styles["body"],
-            ))
+            story.append(Paragraph(f"<b>{i}. {self._safe(growth.get('title', f'Growth Area {i}'))}</b>", self.styles["growth_title"]))
+            story.append(Paragraph("What I'll try next time:", self.styles["body"]))
             self._add_lined_space(story, lines=3)
 
-        # --- Section 3: Coaching Reflections ---
         story.append(PageBreak())
         story.append(Paragraph("Coaching Reflections", self.styles["h2"]))
+        for question in [
+            "What moment in this session are you most proud of? Why?",
+            "If you could re-teach one segment, what would you change?",
+            "What is one goal you'll set for your next session?",
+        ]:
+            story.append(Paragraph(f"<b>Reflect:</b> {question}", self.styles["body"]))
+            self._add_lined_space(story, lines=5)
 
-        reflections = self._extract_reflections(report_markdown)
-        if reflections:
-            for i, question in enumerate(reflections, 1):
-                story.append(Paragraph(
-                    f"<b>Question {i}:</b> {self._safe(question)}",
-                    self.styles["body"],
-                ))
-                self._add_lined_space(story, lines=5)
-        else:
-            # Fallback generic reflections
-            for question in [
-                "What moment in this session are you most proud of? Why?",
-                "If you could re-teach one segment, what would you change?",
-                "What is one goal you'll set for your next session?",
-            ]:
-                story.append(Paragraph(
-                    f"<b>Reflect:</b> {question}",
-                    self.styles["body"],
-                ))
-                self._add_lined_space(story, lines=5)
-
-        # --- Section 4: My Action Plan ---
         story.append(Paragraph("My Action Plan", self.styles["h2"]))
-        story.append(Paragraph(
-            "Write 1-3 concrete actions you'll take before your next session.",
-            self.styles["body_italic"],
-        ))
-
+        story.append(Paragraph("Write 1-3 concrete actions you'll take before your next session.", self.styles["body_italic"]))
         for i in range(1, 4):
             story.append(Paragraph(f"<b>Action {i}:</b>", self.styles["body"]))
             self._add_lined_space(story, lines=3)
 
-        # --- Footer ---
         story.append(Spacer(1, 0.3 * inch))
-        story.append(HRFlowable(
-            width="100%", thickness=1, color=BRAND_MUTED,
-            spaceAfter=8, spaceBefore=8,
-        ))
-        story.append(Paragraph(
-            "Adult Learning Coaching Agent  •  Reflection Worksheet",
-            self.styles["footer"],
-        ))
+        story.append(HRFlowable(width="100%", thickness=1, color=BRAND_MUTED, spaceAfter=8, spaceBefore=8))
+        story.append(Paragraph("Adult Learning Coaching Agent  •  Reflection Worksheet", self.styles["footer"]))
 
-        doc.build(story, onFirstPage=self._add_page_number,
-                  onLaterPages=self._add_page_number)
-
+        doc.build(story, onFirstPage=self._add_page_number, onLaterPages=self._add_page_number)
         return buffer.getvalue()
 
     # ------------------------------------------------------------------
-    # SECTION RENDERERS — Each handles one section of the coaching report
+    # JSON-BASED SECTION RENDERERS — Primary path for new evaluations
+    # ------------------------------------------------------------------
+    # These methods render directly from the structured coaching_data dict
+    # returned by Claude. No markdown parsing, no regex — every section
+    # maps to a JSON key, so nothing is ever empty or missing.
+
+    def _render_executive_summary_from_json(self, story: list, data: dict):
+        """Render Executive Summary from JSON coaching_data."""
+        story.append(Paragraph("Executive Summary", self.styles["h2"]))
+        summary = data.get("executive_summary", "")
+        if summary:
+            story.append(Paragraph(self._safe(summary), self.styles["body"]))
+        story.append(Spacer(1, 0.1 * inch))
+
+    def _render_strengths_from_json(self, story: list, data: dict):
+        """Render Strengths to Build On from JSON coaching_data."""
+        story.append(Paragraph("Strengths to Build On", self.styles["h2"]))
+
+        for item in data.get("strengths", []):
+            title = item.get("title", "")
+            segment = item.get("segment", "")
+            timestamp = item.get("timestamp", "")
+
+            elements = []
+            # Title with segment label
+            segment_label = f" (Segment {segment})" if segment else ""
+            elements.append(Paragraph(
+                f"<b>{self._safe(title)}{segment_label}</b>",
+                self.styles["strength_title"],
+            ))
+
+            # Evidence quote with timestamp
+            quote = item.get("evidence_quote", "")
+            if quote or timestamp:
+                ts_text = f"[{timestamp}] " if timestamp else ""
+                elements.append(Paragraph(
+                    f"<font color='#718096'>{self._safe(ts_text)}</font>"
+                    f"<i>{self._safe(quote)}</i>",
+                    self.styles["body"],
+                ))
+
+            # Why effective
+            why = item.get("why_effective", "")
+            if why:
+                elements.append(Paragraph(
+                    self._safe(why),
+                    self.styles["sub_bullet"],
+                ))
+
+            # How to amplify
+            amplify = item.get("how_to_amplify", "")
+            if amplify:
+                elements.append(Paragraph(
+                    self._safe(amplify),
+                    self.styles["sub_bullet"],
+                ))
+
+            elements.append(Spacer(1, 6))
+            story.append(KeepTogether(elements))
+
+    def _render_growth_opportunities_from_json(self, story: list, data: dict):
+        """Render Growth Opportunities from JSON coaching_data."""
+        story.append(Spacer(1, 0.2 * inch))
+        story.append(Paragraph("Growth Opportunities", self.styles["h2"]))
+
+        for item in data.get("growth_opportunities", []):
+            title = item.get("title", "")
+            segment = item.get("segment", "")
+            timestamp = item.get("timestamp", "")
+
+            elements = []
+            segment_label = f" (Segment {segment})" if segment else ""
+            elements.append(Paragraph(
+                f"<b>{self._safe(title)}{segment_label}</b>",
+                self.styles["growth_title"],
+            ))
+
+            # Evidence quote with timestamp
+            quote = item.get("evidence_quote", "")
+            if quote or timestamp:
+                ts_text = f"[{timestamp}] " if timestamp else ""
+                elements.append(Paragraph(
+                    f"<font color='#718096'>{self._safe(ts_text)}</font>"
+                    f"<i>{self._safe(quote)}</i>",
+                    self.styles["body"],
+                ))
+
+            # Why it matters
+            why = item.get("why_it_matters", "")
+            if why:
+                elements.append(Paragraph(
+                    self._safe(why),
+                    self.styles["sub_bullet"],
+                ))
+
+            # Specific action
+            action = item.get("specific_action", "")
+            if action:
+                elements.append(Paragraph(
+                    self._safe(action),
+                    self.styles["sub_bullet"],
+                ))
+
+            elements.append(Spacer(1, 6))
+            story.append(KeepTogether(elements))
+
+    def _render_prioritized_improvements_from_json(self, story: list, data: dict):
+        """Render Top 5 Prioritized Improvements from JSON coaching_data."""
+        story.append(Paragraph(
+            "Top 5 Prioritized Improvements",
+            self.styles["h2"],
+        ))
+
+        for item in data.get("top_5_improvements", []):
+            rank = item.get("rank", "")
+            title = item.get("title", "")
+            observation = item.get("observation", "")
+            evidence = item.get("evidence", [])
+            impact = item.get("impact", "")
+            suggestions = item.get("suggestions", "")
+            first_step = item.get("first_step", "")
+
+            # Legacy format support: single sentence + rationale
+            improvement = item.get("improvement", "")
+            rationale = item.get("rationale", "")
+
+            elements = []
+            elements.append(Paragraph(
+                f"<font color='{BRAND_SECONDARY.hexval()}'><b>{rank}.</b></font> "
+                f"<b>{self._safe(title or improvement)}</b>",
+                self.styles["h3"],
+            ))
+
+            if observation:
+                elements.append(Paragraph(
+                    self._safe(observation),
+                    self.styles["body"],
+                ))
+
+            # Evidence timestamps
+            if evidence:
+                for ev in evidence:
+                    elements.append(Paragraph(
+                        f"<font color='#718096'>{self._safe(str(ev))}</font>",
+                        self.styles["sub_bullet"],
+                    ))
+
+            if impact:
+                elements.append(Paragraph(
+                    f"<b>Impact:</b> {self._safe(impact)}",
+                    self.styles["sub_bullet"],
+                ))
+
+            if suggestions:
+                elements.append(Paragraph(
+                    f"<b>Try this:</b> {self._safe(suggestions)}",
+                    self.styles["sub_bullet"],
+                ))
+
+            if first_step:
+                elements.append(Paragraph(
+                    f"<b>First step:</b> {self._safe(first_step)}",
+                    self.styles["sub_bullet"],
+                ))
+
+            # Legacy fallback for old-format items
+            if rationale and not observation:
+                elements.append(Paragraph(
+                    self._safe(rationale),
+                    self.styles["sub_bullet"],
+                ))
+
+            elements.append(Spacer(1, 4))
+            story.append(KeepTogether(elements))
+
+    def _render_timestamped_moments_from_json(self, story: list, data: dict):
+        """Render Timestamped Moments to Review from JSON coaching_data."""
+        story.append(Spacer(1, 0.2 * inch))
+        story.append(Paragraph(
+            "Timestamped Moments to Review",
+            self.styles["h2"],
+        ))
+
+        moments = data.get("timestamped_moments", [])
+        if not moments:
+            return
+
+        for moment in moments:
+            timestamp = moment.get("timestamp", "")
+            segment = moment.get("segment", "")
+            moment_type = moment.get("type", "")
+            context = moment.get("context", "")
+            quote = moment.get("quote", "")
+            coaching_note = moment.get("coaching_note", "")
+            reframe = moment.get("suggested_reframe", "")
+
+            # Legacy format support
+            label = moment.get("label", "")
+            note = moment.get("note", "")
+
+            # Choose color based on type
+            type_color = BRAND_ACCENT.hexval() if moment_type == "Exemplary" else BRAND_CAUTION.hexval()
+            type_label = moment_type or label
+
+            elements = []
+            elements.append(Paragraph(
+                f"<font color='#718096'>[{self._safe(timestamp)}]</font> "
+                f"<font color='{type_color}'><b>{self._safe(type_label)}</b></font>"
+                + (f"  {self._safe(context)}" if context else ""),
+                self.styles["body"],
+            ))
+
+            if quote:
+                elements.append(Paragraph(
+                    f"<i>{self._safe(quote)}</i>",
+                    self.styles["sub_bullet"],
+                ))
+
+            if coaching_note:
+                elements.append(Paragraph(
+                    self._safe(coaching_note),
+                    self.styles["sub_bullet"],
+                ))
+            elif note:
+                elements.append(Paragraph(
+                    self._safe(note),
+                    self.styles["sub_bullet"],
+                ))
+
+            if reframe:
+                elements.append(Paragraph(
+                    f"<b>Suggestion:</b> {self._safe(reframe)}",
+                    self.styles["sub_bullet"],
+                ))
+
+            elements.append(Spacer(1, 4))
+            story.append(KeepTogether(elements))
+
+    def _render_reflections_from_json(self, story: list, data: dict):
+        """Render Coaching Reflections from JSON coaching_data."""
+        story.append(Paragraph("Coaching Reflections", self.styles["h2"]))
+
+        reflections = data.get("coaching_reflections", [])
+
+        # Handle both list format (new) and dict format (legacy)
+        if isinstance(reflections, list):
+            for i, question in enumerate(reflections, 1):
+                story.append(Paragraph(
+                    f"<b>{i}.</b> {self._safe(question)}",
+                    self.styles["body"],
+                ))
+                story.append(Spacer(1, 4))
+        elif isinstance(reflections, dict):
+            # Legacy dict format with named keys
+            for i, key in enumerate([
+                "proud_moment_prompt", "reteach_prompt", "next_session_goal_prompt"
+            ], 1):
+                question = reflections.get(key, "")
+                if question:
+                    story.append(Paragraph(
+                        f"<b>{i}.</b> {self._safe(question)}",
+                        self.styles["body"],
+                    ))
+                    story.append(Spacer(1, 4))
+
+    def _render_next_steps_from_json(self, story: list, data: dict):
+        """Render Next Steps from JSON coaching_data."""
+        story.append(Spacer(1, 0.2 * inch))
+        story.append(Paragraph("Next Steps", self.styles["h2"]))
+
+        next_steps = data.get("next_steps", {})
+
+        # Handle both dict format (new) and legacy action_plan format
+        if isinstance(next_steps, dict) and next_steps:
+            labels = [
+                ("keep_doing", "Keep doing"),
+                ("start_doing", "Start doing"),
+                ("adjust", "Adjust"),
+            ]
+            for key, label in labels:
+                value = next_steps.get(key, "")
+                if value:
+                    story.append(Paragraph(
+                        f"<b>{self._safe(label)}:</b> {self._safe(value)}",
+                        self.styles["bullet"],
+                    ))
+                    story.append(Spacer(1, 4))
+
+        # Also check for legacy action_plan format
+        action_plan = data.get("action_plan", {})
+        if action_plan and not next_steps:
+            story.append(Paragraph(
+                self._safe(action_plan.get("instructions", "")),
+                self.styles["body_italic"],
+            ))
+            for key in ["action_1_label", "action_2_label", "action_3_label"]:
+                label = action_plan.get(key, "")
+                if label:
+                    story.append(Paragraph(
+                        f"<b>{self._safe(label)}</b>",
+                        self.styles["bullet"],
+                    ))
+                    story.append(Spacer(1, 4))
+
+    # ------------------------------------------------------------------
+    # LEGACY SECTION RENDERERS — Fallback for older evaluation records
     # ------------------------------------------------------------------
 
     def _render_executive_summary(self, story: list, markdown: str):
@@ -698,10 +1274,26 @@ class PDFReportGenerator:
     # ------------------------------------------------------------------
 
     def _extract_section(self, markdown: str, heading: str) -> str:
-        """Extract text content between a ## heading and the next ## heading."""
-        pattern = rf'##\s+{re.escape(heading)}\s*\n(.*?)(?=\n##\s|\Z)'
-        match = re.search(pattern, markdown, re.DOTALL)
-        return match.group(1).strip() if match else ""
+        """Extract text content between a ## heading and the next ## heading.
+
+        Handles both plain headings ('## Executive Summary') and numbered
+        headings ('## Section 1: Executive Summary') so the parser works
+        with older and newer report formats. Also handles partial heading
+        matches (e.g., 'Next Steps' matches 'Conclusion and Next Steps',
+        'Coaching Reflections' matches 'Coaching Reflections for the Instructor',
+        'Top 5 Prioritized' matches 'Top 3-5 Prioritized').
+        """
+        escaped = re.escape(heading)
+        # Match optional "Section N: " prefix and allow extra words in the heading
+        pattern = rf'##\s+(?:\*\*)?(?:Section\s+\d+:\s*)?(?:[\w\-]+\s+)?{escaped}[\w\s]*(?:\*\*)?\s*\n(.*?)(?=\n##\s|\Z)'
+        match = re.search(pattern, markdown, re.DOTALL | re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+
+        # Fallback: try a simpler substring match for the heading
+        pattern2 = rf'##\s+(?:\*\*)?[^#\n]*{escaped}[^#\n]*(?:\*\*)?\s*\n(.*?)(?=\n##\s|\Z)'
+        match2 = re.search(pattern2, markdown, re.DOTALL | re.IGNORECASE)
+        return match2.group(1).strip() if match2 else ""
 
     def _extract_reflections(self, markdown: str) -> list[str]:
         """Extract reflection questions from the Coaching Reflections section."""

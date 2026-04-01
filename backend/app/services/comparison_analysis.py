@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Comparison analysis service — sends multiple evaluation reports to Claude
 for cross-session analysis.
@@ -67,7 +69,7 @@ class ComparisonAnalysisService:
 
     def __init__(self):
         self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self.model = "claude-sonnet-4-20250514"
+        self.model = "claude-sonnet-4-5"
 
     def analyze_comparison(
         self,

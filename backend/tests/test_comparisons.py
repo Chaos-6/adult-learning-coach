@@ -188,8 +188,8 @@ def test_personal_performance_prompt_structure():
     assert "Session 2" in prompt
     assert "Trend Analysis" in prompt
     assert "Pattern Recognition" in prompt
-    assert "Metric Trends" in prompt
-    assert "Prioritized Action Plan" in prompt
+    assert "METRIC TRENDS" in prompt
+    assert "PRIORITIZED ACTION PLAN" in prompt
     assert "Personal Performance Tracking" in prompt
 
 

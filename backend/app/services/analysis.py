@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Coaching analysis service — sends transcripts to Claude for evaluation.
 
@@ -24,6 +26,7 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
+from typing import Optional
 
 import anthropic
 
@@ -34,7 +37,8 @@ from app.services.prompts import SYSTEM_PROMPT, build_analysis_prompt
 @dataclass
 class AnalysisResult:
     """Structured output from the coaching analysis."""
-    report_markdown: str             # Full coaching report
+    report_markdown: str             # Raw Claude response (JSON string)
+    coaching_data: dict = field(default_factory=dict)  # Parsed JSON from Claude
     metrics: dict = field(default_factory=dict)  # Extracted metrics for tracking
     strengths: list = field(default_factory=list)
     growth_opportunities: list = field(default_factory=list)
@@ -57,9 +61,9 @@ class AnalysisService:
         self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         # claude-sonnet-4-20250514 is the PRD's recommended model
         # Good balance of quality, speed, and cost for coaching analysis
-        self.model = "claude-sonnet-4-20250514"
+        self.model = "claude-sonnet-4-5-20250929"
 
-    def analyze(self, transcript: str, instructor_name: str = "the instructor") -> AnalysisResult:
+    def analyze(self, transcript: str, instructor_name: str = "the instructor", class_name: str | None = None) -> AnalysisResult:
         """Analyze a transcript and generate a coaching report.
 
         This is a BLOCKING call (like transcription). It will be run
@@ -75,7 +79,7 @@ class AnalysisService:
         start_time = time.time()
 
         # Build the prompt
-        user_prompt = build_analysis_prompt(transcript, instructor_name)
+        user_prompt = build_analysis_prompt(transcript, instructor_name, class_name)
 
         # Call Claude
         message = self.client.messages.create(
@@ -90,16 +94,50 @@ class AnalysisService:
 
         processing_time = int(time.time() - start_time)
 
-        # Extract the report text
-        report_markdown = message.content[0].text
+        # Extract the raw response text
+        raw_response = message.content[0].text
 
-        # Parse metrics from the report
-        metrics = self._extract_metrics(report_markdown)
-        strengths = self._extract_sections(report_markdown, "Strengths to Build On")
-        growth = self._extract_sections(report_markdown, "Growth Opportunities")
+        # Parse the JSON response from Claude
+        coaching_data = self._parse_json_response(raw_response)
+
+        # Pull metrics and sections directly from the structured JSON.
+        # The metrics dict may contain calculation and confidence fields
+        # alongside the numeric values; extract only the numeric keys for
+        # the DB metrics column (used for historical tracking/comparisons).
+        raw_metrics = coaching_data.get("metrics", {})
+        numeric_metric_keys = {
+            "wpm", "pauses_per_10min", "filler_words_per_min",
+            "questions_per_5min", "understanding_checks_per_hour",
+            "tangent_percentage", "curse_of_knowledge_count",
+        }
+        metrics = {k: v for k, v in raw_metrics.items()
+                   if k in numeric_metric_keys and v is not None}
+
+        # Convert strengths to the legacy list-of-dicts format that the
+        # legacy PDF path and worksheet expect, while preserving new fields
+        # in coaching_data for the JSON-based rendering path.
+        strengths = [
+            {
+                "title": s.get("title", ""),
+                "text": f"{s.get('why_effective', '')} {s.get('how_to_amplify', '')}",
+                "timestamp": s.get("timestamp"),
+                "segment": s.get("segment"),
+            }
+            for s in coaching_data.get("strengths", [])
+        ]
+        growth = [
+            {
+                "title": g.get("title", ""),
+                "text": f"{g.get('why_it_matters', '')} {g.get('specific_action', '')}",
+                "timestamp": g.get("timestamp"),
+                "segment": g.get("segment"),
+            }
+            for g in coaching_data.get("growth_opportunities", [])
+        ]
 
         return AnalysisResult(
-            report_markdown=report_markdown,
+            report_markdown=raw_response,
+            coaching_data=coaching_data,
             metrics=metrics,
             strengths=strengths,
             growth_opportunities=growth,
@@ -109,73 +147,49 @@ class AnalysisService:
             model=self.model,
         )
 
-    def _extract_metrics(self, report: str) -> dict:
-        """Parse the Metrics Snapshot table from the report.
+    def _parse_json_response(self, raw_response: str) -> dict:
+        """Parse Claude's JSON response, with a safe fallback if parsing fails.
 
-        Looks for the markdown table and extracts key-value pairs.
-        This is best-effort — if Claude formats the table differently,
-        we still have the full report as fallback.
+        Claude should return pure JSON (per the prompt), but defensively we
+        strip any accidental markdown code fences before parsing.
+        If parsing still fails we return a minimal valid structure so the
+        rest of the pipeline does not crash.
         """
-        metrics = {}
+        # Strip markdown code fences if Claude accidentally added them
+        cleaned = raw_response.strip()
+        # Remove opening fence: ```json or ```
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+        # Remove closing fence
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
 
-        # Try to extract WPM
-        wpm_match = re.search(r'Speaking Pace.*?\|\s*(\d+(?:\.\d+)?)', report)
-        if wpm_match:
-            metrics["wpm"] = float(wpm_match.group(1))
-
-        # Strategic pauses per 10 min
-        pause_match = re.search(r'Strategic Pauses.*?\|\s*(\d+(?:\.\d+)?)', report)
-        if pause_match:
-            metrics["pauses_per_10min"] = float(pause_match.group(1))
-
-        # Filler words per min
-        filler_match = re.search(r'Filler Words.*?\|\s*(\d+(?:\.\d+)?)', report)
-        if filler_match:
-            metrics["filler_words_per_min"] = float(filler_match.group(1))
-
-        # Questions per 5 min
-        question_match = re.search(r'Questions.*?\|\s*(\d+(?:\.\d+)?)', report)
-        if question_match:
-            metrics["questions_per_5min"] = float(question_match.group(1))
-
-        # Tangent time %
-        tangent_match = re.search(r'Tangent.*?\|\s*(\d+(?:\.\d+)?)%?', report)
-        if tangent_match:
-            metrics["tangent_percentage"] = float(tangent_match.group(1))
-
-        return metrics
-
-    def _extract_sections(self, report: str, section_title: str) -> list[dict]:
-        """Extract individual items from a report section.
-
-        Looks for bold headings (**text**) under the given section
-        and captures the content until the next heading.
-        """
-        items = []
-
-        # Find the section
-        section_pattern = rf'## {re.escape(section_title)}\s*\n(.*?)(?=\n## |\Z)'
-        section_match = re.search(section_pattern, report, re.DOTALL)
-
-        if not section_match:
-            return items
-
-        section_text = section_match.group(1)
-
-        # Find individual items (bold headings)
-        item_pattern = r'\*\*(.+?)\*\*\s*\n(.*?)(?=\n\s*(?:- )?\*\*|\Z)'
-        for match in re.finditer(item_pattern, section_text, re.DOTALL):
-            title = match.group(1).strip()
-            body = match.group(2).strip()
-
-            # Try to extract a timestamp
-            timestamp_match = re.search(r'\[(\d{2}:\d{2}:\d{2})\]', body)
-            timestamp = timestamp_match.group(1) if timestamp_match else None
-
-            items.append({
-                "title": title,
-                "text": body[:500],  # Cap at 500 chars for DB storage
-                "timestamp": timestamp,
-            })
-
-        return items
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            # Log the error and return a safe empty structure so the
+            # pipeline does not crash on a malformed response.
+            print(f"[AnalysisService] JSON parse error: {e}")
+            print(f"[AnalysisService] First 500 chars of response: {raw_response[:500]}")
+            return {
+                "instructor_name": "Unknown",
+                "session_date": "",
+                "session_topic": "",
+                "metrics": {},
+                "strengths": [],
+                "growth_opportunities": [],
+                "top_5_improvements": [],
+                "timestamped_moments": [],
+                "coaching_reflections": {
+                    "proud_moment_prompt": "What moment in this session are you most proud of? Why?",
+                    "reteach_prompt": "If you could re-teach one segment, what would you change?",
+                    "next_session_goal_prompt": "What is one goal you will set for your next session?",
+                },
+                "action_plan": {
+                    "instructions": "Write 1-3 concrete actions you will take before your next session.",
+                    "action_1_label": "Action 1:",
+                    "action_2_label": "Action 2:",
+                    "action_3_label": "Action 3:",
+                },
+            }

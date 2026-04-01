@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Evaluation API endpoints.
 
@@ -215,6 +217,9 @@ async def get_report(
             detail=f"Report not ready. Current status: {evaluation.status}",
         )
 
+    # Resolve instructor name and class name for UI personalization
+    instructor_name, class_name = await _resolve_instructor_and_class(db, evaluation)
+
     return ReportResponse(
         id=evaluation.id,
         video_id=evaluation.video_id,
@@ -227,6 +232,8 @@ async def get_report(
         processing_started_at=evaluation.processing_started_at,
         processing_completed_at=evaluation.processing_completed_at,
         created_at=evaluation.created_at,
+        instructor_name=instructor_name,
+        class_name=class_name,
     )
 
 
@@ -243,15 +250,17 @@ async def download_report_pdf(
     is fast (<100ms). We can cache or pre-generate later if needed.
     """
     evaluation = await _get_completed_evaluation(db, evaluation_id)
-    instructor_name = await _get_instructor_name(db, evaluation.instructor_id)
+    instructor_name, class_name = await _resolve_instructor_and_class(db, evaluation)
 
     generator = PDFReportGenerator()
     pdf_bytes = generator.generate_coaching_report(
         report_markdown=evaluation.report_markdown,
         instructor_name=instructor_name,
+        class_name=class_name,
         metrics=evaluation.metrics,
         strengths=evaluation.strengths,
         growth_opportunities=evaluation.growth_opportunities,
+        coaching_data=evaluation.coaching_data or None,
     )
 
     filename = f"coaching_report_{instructor_name.replace(' ', '_')}.pdf"
@@ -273,14 +282,16 @@ async def download_worksheet_pdf(
     for the instructor to write reflections and action plans.
     """
     evaluation = await _get_completed_evaluation(db, evaluation_id)
-    instructor_name = await _get_instructor_name(db, evaluation.instructor_id)
+    instructor_name, class_name = await _resolve_instructor_and_class(db, evaluation)
 
     generator = PDFReportGenerator()
     pdf_bytes = generator.generate_reflection_worksheet(
         instructor_name=instructor_name,
+        class_name=class_name,
         strengths=evaluation.strengths,
         growth_opportunities=evaluation.growth_opportunities,
         report_markdown=evaluation.report_markdown or "",
+        coaching_data=evaluation.coaching_data or None,
     )
 
     filename = f"reflection_worksheet_{instructor_name.replace(' ', '_')}.pdf"
@@ -315,12 +326,39 @@ async def _get_completed_evaluation(
 
 
 async def _get_instructor_name(db: AsyncSession, instructor_id: UUID) -> str:
-    """Look up instructor display name, with fallback."""
+    """Look up instructor display name from DB, with fallback."""
     if not instructor_id:
         return "Instructor"
-
-    result = await db.execute(
-        select(User).where(User.id == instructor_id)
-    )
+    result = await db.execute(select(User).where(User.id == instructor_id))
     user = result.scalar_one_or_none()
     return user.display_name if user else "Instructor"
+
+
+async def _get_video_metadata(db: AsyncSession, video_id: UUID) -> dict:
+    """Return the metadata dict for a video, or empty dict if not found."""
+    result = await db.execute(select(Video).where(Video.id == video_id))
+    video = result.scalar_one_or_none()
+    return (video.metadata_ or {}) if video else {}
+
+
+async def _resolve_instructor_and_class(
+    db: AsyncSession,
+    evaluation: Evaluation,
+) -> tuple[str, str | None]:
+    """Resolve the instructor name and class name for PDF generation.
+
+    Priority for instructor name:
+      1. instructor_name stored in video metadata (typed at upload time)
+      2. display_name from the User record in the DB
+      3. Fallback string "Instructor"
+
+    Class name comes only from video metadata (typed at upload time).
+    """
+    metadata = await _get_video_metadata(db, evaluation.video_id)
+
+    instructor_name = metadata.get("instructor_name") or None
+    if not instructor_name:
+        instructor_name = await _get_instructor_name(db, evaluation.instructor_id)
+
+    class_name = metadata.get("class_name") or None
+    return instructor_name, class_name
