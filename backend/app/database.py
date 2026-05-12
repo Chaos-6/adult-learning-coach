@@ -70,3 +70,27 @@ async def init_db():
     """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+async def run_migrations():
+    """Apply incremental schema changes to an existing database.
+
+    Each migration is idempotent (safe to run multiple times).
+    Run this once after pulling code that adds new columns:
+
+        cd backend
+        python -c "import asyncio; from app.database import run_migrations; asyncio.run(run_migrations())"
+    """
+    async with engine.begin() as conn:
+        # Migration 001: Add coaching_data JSONB column to evaluations
+        # This stores the parsed JSON from Claude, which drives the new
+        # structured PDF renderer. Safe to run on existing databases.
+        await conn.execute(
+            __import__('sqlalchemy').text(
+                """
+                ALTER TABLE evaluations
+                ADD COLUMN IF NOT EXISTS coaching_data JSONB DEFAULT '{}'::jsonb;
+                """
+            )
+        )
+    print("✅ Migrations complete.")

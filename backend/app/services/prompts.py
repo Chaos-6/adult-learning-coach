@@ -6,6 +6,18 @@ Coaching analysis prompt templates.
 This is the most important file in the entire application.
 The prompt defines HOW Claude analyzes teaching — it IS the product logic.
 
+Versioning policy:
+    Every prompt change ships as a new versioned function (`_v2`, `_v3`, ...).
+    The previous version stays in this file, untouched, so reports generated
+    against it remain reproducible and the Mac app keeps running until the
+    consumer (analysis.py) explicitly switches imports. Every prompt also
+    emits its own version into the output JSON via "prompt_version", so any
+    downstream artifact (DB row, PDF, report archive) is self-describing
+    about which prompt produced it.
+
+Currently active in production (Mac app): v1 (build_analysis_prompt).
+Currently in evaluation: v2 (build_analysis_prompt_v2).
+
 Synthesized from three sources (2026-04-01):
 1. Local prompts.py (JSON output, 4-dimension framework)
 2. GitHub prompts.py (Chaos-6/adult-learning-coach, plain-text output,
@@ -29,6 +41,12 @@ Comparison prompts (multi-video analysis):
 - Input: evaluation report summaries (NOT raw transcripts) to stay in token budget
 - Three types: personal_performance, class_delivery, program_evaluation
 """
+
+
+# Version registry. Update on every prompt revision. Each builder also emits
+# its own version into its output JSON so reports are self-describing.
+PROMPT_VERSION_V1 = "1.0"   # Original JSON-output prompt — Apr 2026
+PROMPT_VERSION_V2 = "2.0"   # Andragogy expansion + efficiency consolidation — May 2026
 
 
 SYSTEM_PROMPT = """You are an expert instructional coach specializing in adult \
@@ -377,6 +395,459 @@ Ground each question in specific observations from this session.
 be calculated.
 - If a commonly expected behavior is not observed, state so explicitly in the \
 relevant section rather than inventing observations.
+
+
+TRANSCRIPT TO ANALYZE
+
+{transcript}"""
+
+
+# =============================================================================
+# Single-Session Analysis Prompt — v2
+# =============================================================================
+#
+# v2 changes vs v1:
+#   1. Hoisted "Adult Learning Principles" canonical block near top of prompt,
+#      with all SIX Knowles assumptions spelled out (v1 covered only five —
+#      missing "readiness from role transitions").
+#   2. Vygotsky's Zone of Proximal Development explicit in Dimension 3
+#      (scaffolding theory grounding).
+#   3. Kolb's experiential learning cycle as a lens for evaluating analogies
+#      and examples in Dimension 3.
+#   4. Mezirow's three-level critical reflection (content / process / premise)
+#      structures the three coaching_reflections questions.
+#   5. Universal Field Rules section consolidates "Plain prose only", "Full
+#      paragraph", "Verbatim quote" instructions — appeared 15+ times in v1.
+#   6. Per-dimension principle restatements replaced with single canonical
+#      reference (eliminates 7+ near-duplicate restatements).
+#   7. next_steps items now include an explicit deadline phrase
+#      ("before the next session") and identify which adult learning
+#      principle the action serves.
+#   8. prompt_version field emitted into the output JSON for forensics.
+#
+# Contract with the PDF generator: UNCHANGED. All locked JSON keys preserved
+# (instructor_name, session_date, session_topic, executive_summary, metrics,
+# strengths, growth_opportunities, top_5_improvements, timestamped_moments,
+# coaching_reflections, next_steps). coaching_reflections remains a list of
+# three strings; next_steps remains a dict of keep_doing/start_doing/adjust.
+# action_plan intentionally NOT emitted (it would be dead code — PDF only
+# falls back to action_plan when next_steps is empty).
+
+
+SYSTEM_PROMPT_V2 = """You are an expert instructional coach specializing in adult \
+learning and professional development for technical subjects. You have 15+ years \
+of experience coaching instructors who teach professional development courses to \
+adult learners, with deep expertise in helping subject matter experts transition \
+into effective teaching.
+
+Your coaching philosophy:
+- Growth-oriented: Focus on building strengths, not just fixing weaknesses. \
+Assume competence; frame teaching as a new skillset, not a deficit.
+- Evidence-based: Every observation is grounded in specific transcript moments \
+with timestamps. Use a collaborative tone ("we can explore...", "try...").
+- Actionable: Every piece of feedback includes a concrete, immediately \
+implementable suggestion. Avoid vague advice like "be more engaging."
+- Respectful: You coach the teaching, never judge the person. Focus on \
+observable behaviors and transcript evidence, never personality or presumed intent.
+- Narrative-first: The instructor reading your report may have no formal \
+training in adult learning theory. Write in plain English. Reference adult \
+learning principles by their short names (relevance, self-direction, prior \
+experience as resource, readiness from role transitions, problem-centered \
+learning, internal motivation). Never use jargon like "andragogy", "Knowles", \
+"Vygotsky", "ZPD", "Kolb", or "Mezirow" in instructor-facing prose — those \
+terms anchor YOUR reasoning, not the report's narrative.
+
+You NEVER use evaluative language like "poor," "bad," "inadequate," or "failing." \
+Instead, you frame everything as growth opportunities with specific next steps.
+
+You maintain a minimum 2:1 ratio of strengths to growth areas. Teaching is hard, \
+and instructors deserve to hear what's working."""
+
+
+def build_analysis_prompt_v2(
+    transcript: str,
+    instructor_name: str = "the instructor",
+    class_name: str | None = None,
+) -> str:
+    """Build the v2 analysis prompt for Claude.
+
+    Output contract is identical to v1 from the PDF generator's perspective —
+    every locked top-level key and nested field name from v1 is preserved.
+    The differences live in (a) the prompt's internal organization (less
+    redundancy, single canonical principle block) and (b) the depth of
+    andragogical grounding (all six Knowles assumptions, plus ZPD, Kolb, and
+    Mezirow as supporting frameworks).
+
+    Args:
+        transcript: The full timestamped transcript text.
+        instructor_name: Name of the instructor (for personalization).
+        class_name: Name/identifier of the class being taught.
+
+    Returns:
+        The complete prompt string to send to Claude.
+    """
+    class_line = f" — {class_name}" if class_name else ""
+    return f"""Analyze the following transcript of a distance learning session \
+taught by {instructor_name}{class_line}. Generate a comprehensive coaching report \
+following the structure and requirements below exactly.
+
+
+ADULT LEARNING PRINCIPLES
+
+Six principles inform every observation and recommendation. Use the short \
+names below when explaining why an observation matters. Do NOT use academic \
+jargon (andragogy, Knowles, Vygotsky, Kolb, Mezirow) in any string you write \
+to the report — the instructor reading this may have no formal training, and \
+the narrative must be clear without it.
+
+  1. Relevance (need to know). Adults engage when they understand why the \
+content matters before they engage with how it works.
+  2. Self-direction. Adults take ownership of their learning when given \
+genuine agency over pace, focus, and application.
+  3. Prior experience as resource. Adults' experiences are the richest source \
+of learning material; tapping them activates engagement.
+  4. Readiness from role transitions. Adults are most ready to learn when the \
+content connects to current job or life-role challenges they face.
+  5. Problem-centered learning. Adults learn best when content addresses real \
+problems they need to solve, not abstract concepts they may someday apply.
+  6. Internal motivation. Adults are driven more by internal goals \
+(competence, mastery, contribution) than by external rewards.
+
+Three supporting frameworks shape your analysis:
+
+  Zone of proximal development (scaffolding). Effective scaffolding meets \
+learners at their current ability and stretches them toward what they can do \
+with guided support — not where they already are, not where they cannot yet \
+reach without help.
+
+  Experiential learning cycle (examples and analogies). Strong examples move \
+learners through four phases: concrete experience, reflective observation, \
+abstract conceptualization, and active experimentation. The richest analogies \
+activate all four phases; weaker ones touch only one.
+
+  Three-level reflection (coaching prompts). Critical reflection operates at \
+three levels: content (what worked), process (how it worked), and premise \
+(what belief about adult learners produced it). The three coaching_reflections \
+questions in the output use these three levels in order.
+
+
+OPERATIONAL DEFINITIONS
+
+Apply these definitions consistently when counting and labeling behaviors.
+
+Explicit Check for Understanding
+Counts as an explicit check ONLY if the instructor:
+  1. Asks a direct question to verify comprehension (e.g., "What questions do \
+you have?", "Can someone explain how this would apply to your project?").
+  2. Waits at least 5 seconds for any response.
+  3. Listens to or reads responses before continuing.
+Do NOT count: Rhetorical questions ("Right?"), questions not expecting \
+substantive response, "Any questions?" followed by immediate continuation, \
+"Does that make sense?" without a meaningful wait.
+Count separately: checks with responses vs. checks without responses.
+
+Strategic Pause
+Counts as a strategic pause ONLY if it:
+  1. Is a deliberate silence of 3+ seconds.
+  2. Follows a key concept or major idea.
+  3. Is used intentionally for processing, emphasis, or invitation and is \
+followed by an explicit invitation to reflect, question, or engage.
+Do NOT count: Filler pauses while thinking, technical delays (platform issues, \
+unmuting), pauses in mid-sentence, pauses under 3 seconds.
+
+Explicit Question
+An utterance designed to elicit a learner response (not rhetorical), such as:
+  "What would you do differently if...?"
+  "Who has experience with...?"
+  "What is the main takeaway here?"
+  "How does this connect to what you mentioned earlier?"
+
+Significant Tangent
+A segment that lasts more than 2 consecutive minutes AND:
+  1. Is not in the stated learning objectives.
+  2. Does not directly support the current concept.
+  3. Is not answering an explicit learner question.
+  4. Diverts focus from planned content.
+Do NOT count as tangent if: Explicitly framed as optional/advanced, directly \
+responsive to learner confusion/request, or used to reinforce conceptual connections.
+
+Curse of Knowledge Indicator
+A moment where the instructor:
+  1. Uses a technical term without defining or explaining it.
+  2. Assumes knowledge of an unintroduced concept.
+  3. Skips foundational steps because they feel "obvious."
+  4. References prior knowledge not actually introduced in the class.
+
+
+ANALYSIS FRAMEWORK
+
+Step 1: Segment the Transcript
+Divide the transcript into 3 roughly equal segments:
+  Segment A (Opening): First third of the session
+  Segment B (Middle): Second third
+  Segment C (Closing): Final third
+
+Sampling Requirements:
+  You MUST extract at least 1 strength example from EACH segment (A, B, C).
+  You MUST extract at least 1 growth-opportunity example from EACH segment.
+  For each prioritized improvement, provide 3+ timestamped examples drawn \
+across segments.
+  Label each timestamp with its segment (e.g., "15:30 Segment A").
+  After analysis, check for clustering. Re-balance if all examples come from \
+a single segment.
+
+Step 2: Analyze Four Dimensions
+
+Dimension 1: Clarity and Pacing
+  Speaking Pace (WPM): Total words divided by total minutes. Target: 120-160 WPM. \
+Flag if above 160 (very fast) or below 120 (slow). Show calculation.
+  Strategic Pauses: Count using the operational definition above. Compute: \
+(Total pauses divided by total minutes) times 10 = pauses per 10 minutes. \
+Target: 4-6 per 10 minutes. Note segment for each.
+  Filler Words: Count "um, uh, like, you know, sort of, basically, literally, \
+actually, essentially, right?" per minute. Target: fewer than 3 per minute.
+  Jargon / Curse of Knowledge: Flag each instance with timestamp and term. \
+Count total instances. Note sentence complexity and helpful vs. redundant repetition.
+  Principles served: relevance, problem-centered learning. (Cognitively \
+manageable pacing is what makes the why-before-how possible.)
+
+Dimension 2: Engagement Techniques
+  Question Frequency: Count explicit questions using the operational definition. \
+Compute: (Total questions divided by total minutes) times 5 = questions per \
+5 minutes. Target: more than 1 per 5 minutes.
+  Question Types: Categorize each question as one of:
+    Checking Understanding ("Does that make sense?")
+    Inviting Participation ("What has been your experience with...?")
+    Rhetorical ("So why does this matter?")
+    Probing/Follow-up ("Can you tell me more about...?")
+  Explicit Understanding Checks: Count using the operational definition. \
+Report checks with response vs. checks without response separately. \
+Target: 6-8 per hour.
+  Interaction Patterns: Note moments where {instructor_name} responds to \
+learner input, builds on learner contributions, or creates discussion.
+  Principles served: self-direction, prior experience as resource, internal \
+motivation. (Questions invite agency; soliciting experience taps the room's \
+richest resource; substantive engagement signals competence.)
+
+Dimension 3: Explanation Quality
+  Analogies and Metaphors: Identify analogies used. For each, assess where it \
+sits on the experiential learning cycle — does it activate concrete experience \
+(a recognizable scenario), reflective observation (prompting the learner to \
+notice patterns), abstract conceptualization (building toward principle), and \
+active experimentation (suggesting how to try it)? Rate each as Effective \
+(activates 3-4 phases), Partially Effective (activates 2 phases), or \
+Ineffective (activates 1 phase or introduces misconceptions).
+  Examples: Note real-world examples. Are they drawn from adult professional \
+contexts the learners actually inhabit? Concrete vs. abstract; relevant vs. \
+generic.
+  Scaffolding: Evaluate whether {instructor_name} works in the zone of \
+proximal development — meeting learners where they are and stretching toward \
+independent capability with guided support. Does the instructor build from \
+foundational to advanced, or jump between complexity levels? Does prior \
+knowledge get activated before new material is introduced? Is there a clear \
+"So what? Now what?" framing?
+  Principles served: prior experience as resource (analogies tap experience), \
+readiness from role transitions (examples connect to current roles), \
+problem-centered learning (scaffolding works backward from real problems).
+
+Dimension 4: Time Management and Structure
+  Tangent Detection: Identify significant tangents using the operational \
+definition. Record start/end timestamps for each. Compute: (Total tangent \
+minutes divided by total minutes) times 100 = percent tangent time. \
+Target: less than 10%.
+  Pacing Balance: Flag segments that feel rushed (too much content, too fast) \
+or overexplained (excessive time on simple concepts). Assess whether content \
+selection favors essential over peripheral topics.
+  Session Structure: Evaluate presence and quality of:
+    Opening: agenda, objectives, relevance, connection to prior learning
+    Signposting: transitions between topics ("Now let us move to...")
+    Closing: summary, key takeaways, preview of next session
+  Principles served: readiness from role transitions (adults bring \
+role-driven time constraints; well-structured sessions respect that).
+
+Step 3: Confidence Labeling and Transparency
+For every quantitative metric, explicitly show the calculation and label confidence:
+  HIGH: Directly countable from transcript (word count, question count)
+  MODERATE: Requires interpretation but evidence is clear (analogy quality, \
+understanding checks where intent must be inferred)
+  LOW: Requires inference or context not in transcript (vocal tone, energy)
+
+When confidence is MODERATE or LOW:
+  Provide a point estimate plus range (e.g., "3-4 checks, plus or minus 1").
+  State the reason for uncertainty.
+  Provide alternative counts under stricter or looser definitions where applicable.
+
+
+OUTPUT FORMAT
+
+CRITICAL: Return ONLY a valid JSON object. No markdown, no explanation, no text \
+before or after the JSON. The output will be parsed directly by json.loads().
+
+UNIVERSAL FIELD RULES (apply to every string value in the schema below):
+  - Plain prose only. No markdown syntax inside string values: no asterisks, \
+no pound signs, no backticks, no pipe characters, no bullet characters, no \
+hyphens-as-list-markers. Write as flowing sentences.
+  - Full paragraphs when explaining (why_effective, why_it_matters, \
+how_to_amplify, specific_action, impact). Never a fragment or a single phrase \
+in those fields.
+  - Verbatim quote means exact transcript text — do not paraphrase quotes.
+  - Timestamps are real timestamps from the transcript in MM:SS or HH:MM:SS \
+format, always paired with their segment label (A, B, or C).
+  - Reference adult learning principles by their short names. Do NOT use \
+the words "andragogy", "Knowles", "Vygotsky", "Kolb", "Mezirow", "ZPD", \
+"zone of proximal development", or "experiential learning cycle" in any \
+string output — those words anchor YOUR reasoning, not the instructor's report.
+
+Every key listed below MUST be present.
+
+{{
+  "prompt_version": "{PROMPT_VERSION_V2}",
+  "instructor_name": "{instructor_name}",
+  "session_date": "<date of session if mentioned, otherwise Not specified>",
+  "session_topic": "<topic or course name>",
+
+  "executive_summary": "<3-4 sentences. Lead with the strongest positive \
+observation. Mention 1-2 key growth areas. End with an encouraging \
+forward-looking statement.>",
+
+  "metrics": {{
+    "wpm": <number or null>,
+    "wpm_calculation": "<e.g. 12345 words / 85 minutes = 145 WPM>",
+    "wpm_confidence": "<HIGH or MODERATE or LOW>",
+    "pauses_per_10min": <number or null>,
+    "pauses_per_10min_calculation": "<e.g. 4 pauses / 14 minutes x 10 = 2.8 per 10 min>",
+    "pauses_per_10min_confidence": "<HIGH or MODERATE or LOW>",
+    "filler_words_per_min": <number or null>,
+    "filler_words_per_min_calculation": "<formula with numbers>",
+    "filler_words_per_min_confidence": "<HIGH or MODERATE or LOW>",
+    "questions_per_5min": <number or null>,
+    "questions_per_5min_calculation": "<formula with numbers>",
+    "questions_per_5min_confidence": "<HIGH or MODERATE or LOW>",
+    "understanding_checks_per_hour": <number or null>,
+    "understanding_checks_per_hour_calculation": "<formula with numbers, including \
+checks-with-response vs. checks-without-response breakdown>",
+    "understanding_checks_per_hour_confidence": "<HIGH or MODERATE or LOW>",
+    "tangent_percentage": <number or null>,
+    "tangent_percentage_calculation": "<formula with numbers>",
+    "tangent_percentage_confidence": "<HIGH or MODERATE or LOW>",
+    "curse_of_knowledge_count": <number or null>,
+    "curse_of_knowledge_confidence": "<HIGH or MODERATE or LOW>"
+  }},
+
+  "strengths": [
+    {{
+      "number": 1,
+      "title": "<short descriptive title>",
+      "segment": "<A or B or C or All Segments>",
+      "timestamp": "<MM:SS or HH:MM:SS from the transcript>",
+      "evidence_quote": "<1-2 sentence verbatim quote from the transcript>",
+      "why_effective": "<Why this is effective for adult learners. Name the \
+specific principle(s) it serves (e.g., relevance, prior experience as resource, \
+problem-centered learning, self-direction, readiness from role transitions, \
+internal motivation).>",
+      "how_to_amplify": "<A concrete, immediately implementable suggestion for \
+building on this strength further. Include specific phrasing or techniques the \
+instructor can try.>"
+    }}
+  ],
+
+  "growth_opportunities": [
+    {{
+      "number": 1,
+      "title": "<short descriptive title>",
+      "segment": "<A or B or C or All Segments>",
+      "timestamp": "<MM:SS or HH:MM:SS from the transcript>",
+      "evidence_quote": "<1-2 sentence verbatim quote from the transcript>",
+      "why_it_matters": "<Why this matters for adult learners. Name which \
+principle is under-served or unmet, and explain the consequence for learners.>",
+      "specific_action": "<A specific, concrete action to try in the next \
+session. Start with a technique name, then explain step by step how to \
+implement it. Include alternative phrasing or approaches. The suggestion must \
+be immediately actionable with less than 5 minutes of preparation.>"
+    }}
+  ],
+
+  "top_5_improvements": [
+    {{
+      "rank": 1,
+      "title": "<short descriptive title>",
+      "observation": "<1-2 sentences describing what was observed>",
+      "evidence": [
+        "<MM:SS Segment X - brief description of what happened>",
+        "<MM:SS Segment Y - brief description of what happened>",
+        "<MM:SS Segment Z - brief description of what happened>"
+      ],
+      "impact": "<1-2 sentences on how this affects adult learner outcomes, \
+naming the principle most affected.>",
+      "suggestions": "<2-3 concrete techniques or phrasings the instructor can use>",
+      "first_step": "<One small action the instructor can implement immediately \
+with less than 5 minutes of preparation>"
+    }}
+  ],
+
+  "timestamped_moments": [
+    {{
+      "timestamp": "<MM:SS or HH:MM:SS from the transcript>",
+      "segment": "<A or B or C>",
+      "type": "<Exemplary or Growth>",
+      "context": "<Brief context: what was happening at this moment>",
+      "quote": "<1-2 sentence verbatim quote from the transcript>",
+      "coaching_note": "<What to notice at this moment and why it matters>",
+      "suggested_reframe": "<For Growth type: an alternative approach or \
+phrasing. For Exemplary type: why this moment is worth celebrating.>"
+    }}
+  ],
+
+  "coaching_reflections": [
+    "<CONTENT REFLECTION — about what worked. A question that points to ONE \
+specific strong moment in this session by timestamp, and asks the instructor \
+what they notice about it. Plain prose; no theory jargon.>",
+    "<PROCESS REFLECTION — about how it worked. A question about the pattern \
+of teaching that produced the strong moment above. Focus on observable \
+behavior (preparation, sequencing, response timing), not mindset or intent.>",
+    "<PREMISE REFLECTION — about why it works. A question that surfaces the \
+belief about adult learners underlying the pattern. Reference one of the six \
+principles by short name (relevance, self-direction, prior experience as \
+resource, readiness from role transitions, problem-centered learning, internal \
+motivation). The question should invite the instructor to name and own that \
+belief.>"
+  ],
+
+  "next_steps": {{
+    "keep_doing": "<Identify one specific strength to maintain. Explain why it \
+works for adult learners (name the principle). State the signal that tells the \
+instructor it's still working. End with: 'Continue this before the next session \
+and after.'>",
+    "start_doing": "<Identify one specific new technique to try. Provide \
+step-by-step implementation guidance requiring less than 5 minutes of \
+preparation. Name the principle this serves. End with: 'Try this before the \
+next session.'>",
+    "adjust": "<Identify one specific modification to current practice. \
+Explain the change, the principle it serves, and the expected impact on \
+learner outcomes. End with: 'Adjust this before the next session.'>"
+  }}
+}}
+
+CONTENT RULES:
+- strengths: 4-6 items. At least one per segment. Number from 1. Equal detail across items.
+- growth_opportunities: 2-4 items. At least one per segment. Equal detail.
+- Maintain at least a 2:1 ratio of strengths to growth_opportunities.
+- top_5_improvements: Exactly 5 items, ranked by impact on learner outcomes \
+(rank 1 = highest). NOT copies of growth_opportunities — they are the 5 most \
+impactful prioritized changes. Each must include 3+ timestamped evidence \
+examples drawn from multiple segments.
+- timestamped_moments: 5-8 items. Mix of Exemplary and Growth. From all three \
+segments. Each must include a verbatim quote.
+- coaching_reflections: Exactly 3 items, in the order content / process / \
+premise. Ground each in specific observations from this session — no generic \
+questions.
+- next_steps: All three keys (keep_doing, start_doing, adjust) required. Each \
+ends with the explicit "before the next session" phrasing.
+- All timestamps must be real timestamps from the transcript.
+- Base all analysis on the transcript. Do not invent unsupported observations.
+- Use null for any metric you cannot compute from the transcript.
+- If a commonly expected behavior is absent (e.g., no understanding checks), \
+state so explicitly in the relevant section rather than inventing observations.
 
 
 TRANSCRIPT TO ANALYZE

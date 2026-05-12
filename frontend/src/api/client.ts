@@ -22,12 +22,14 @@ const api = axios.create({
 export const uploadVideo = async (
   file: File,
   instructorId: string,
-  topic?: string
+  className?: string,
+  instructorName?: string,
 ) => {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("instructor_id", instructorId);
-  if (topic) formData.append("topic", topic);
+  if (className) formData.append("class_name", className);
+  if (instructorName) formData.append("instructor_name", instructorName);
 
   const response = await api.post("/videos/upload", formData, {
     headers: { "Content-Type": "multipart/form-data" },
@@ -64,30 +66,36 @@ export const getReport = async (evaluationId: string) => {
   return response.data;
 };
 
+/** Extract the filename from a Content-Disposition header.
+ *  Falls back to the provided default if the header is missing or unparseable.
+ *  Example header: attachment; filename="coaching_report_Jane_Smith.pdf"
+ */
+function getFilenameFromResponse(response: any, fallback: string): string {
+  const disposition = response.headers["content-disposition"] || "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  return match ? match[1] : fallback;
+}
+
 export const downloadReportPdf = async (evaluationId: string) => {
   const response = await api.get(`/evaluations/${evaluationId}/report/pdf`, {
     responseType: "blob",
   });
-  // Trigger browser download
+  const filename = getFilenameFromResponse(response, "coaching_report.pdf");
   const url = window.URL.createObjectURL(new Blob([response.data]));
   const link = document.createElement("a");
   link.href = url;
-  link.download = "coaching_report.pdf";
+  link.download = filename;
   link.click();
   window.URL.revokeObjectURL(url);
 };
 
-export const downloadWorksheetPdf = async (evaluationId: string) => {
-  const response = await api.get(`/evaluations/${evaluationId}/worksheet/pdf`, {
-    responseType: "blob",
-  });
-  const url = window.URL.createObjectURL(new Blob([response.data]));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "reflection_worksheet.pdf";
-  link.click();
-  window.URL.revokeObjectURL(url);
-};
+// downloadWorksheetPdf removed in v2 (May 2026). The Reflection Worksheet
+// PDF was deprecated when the v2 prompt enhanced coaching_reflections and
+// next_steps inside the main coaching report, making a separate worksheet
+// redundant. The backend endpoint /evaluations/{id}/worksheet/pdf no longer
+// exists. Restore this function and the EvaluationDetail button if the
+// worksheet ever returns.
+
 
 // --- Instructor Dashboard ---
 

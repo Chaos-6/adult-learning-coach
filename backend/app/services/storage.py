@@ -31,7 +31,12 @@ class LocalStorageService:
     """
 
     def __init__(self, base_path: str = "uploads"):
-        self.base_path = Path(base_path)
+        # Use an absolute path anchored to this file's location.
+        # This ensures uploads are always found at:
+        #   backend/uploads/
+        # regardless of what directory the server was launched from.
+        backend_dir = Path(__file__).resolve().parent.parent.parent
+        self.base_path = backend_dir / base_path
         self.base_path.mkdir(parents=True, exist_ok=True)
 
     async def save_file(self, file: UploadFile, key: str, filename: str) -> int:

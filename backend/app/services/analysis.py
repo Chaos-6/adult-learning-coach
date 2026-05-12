@@ -46,6 +46,13 @@ class AnalysisResult:
     output_tokens: int = 0
     processing_time_seconds: int = 0
     model: str = ""
+    # Which prompt version produced this result. Populated from the prompt's
+    # output JSON ("prompt_version" key) if present; falls back to the
+    # PROMPT_VERSION_V1 constant for v1 builders that pre-date the field.
+    # This makes every AnalysisResult self-describing — months from now you
+    # can ask "which prompt produced this evaluation?" without guessing from
+    # metadata.
+    prompt_version: str = ""
 
 
 class AnalysisService:

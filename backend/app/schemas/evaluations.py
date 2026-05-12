@@ -44,6 +44,9 @@ class ReportResponse(BaseModel):
     processing_started_at: Optional[datetime] = None
     processing_completed_at: Optional[datetime] = None
     created_at: datetime
+    # Resolved from video metadata at report-fetch time for UI personalization
+    instructor_name: Optional[str] = None
+    class_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

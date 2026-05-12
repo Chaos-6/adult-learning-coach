@@ -166,7 +166,8 @@ class Evaluation(Base):
     processing_completed_at = Column(DateTime(timezone=True))
 
     # Analysis outputs
-    report_markdown = Column(Text)
+    report_markdown = Column(Text)          # Raw Claude response (JSON string)
+    coaching_data = Column(JSONB, default=dict)  # Parsed JSON from Claude — drives PDF rendering
     report_pdf_s3_key = Column(String(500))
     worksheet_pdf_s3_key = Column(String(500))
 

@@ -271,35 +271,17 @@ async def download_report_pdf(
     )
 
 
-@router.get("/{evaluation_id}/worksheet/pdf")
-async def download_worksheet_pdf(
-    evaluation_id: UUID,
-    db: AsyncSession = Depends(get_db),
-):
-    """Download the reflection worksheet as a PDF.
-
-    The worksheet is a condensed, printable document with lined space
-    for the instructor to write reflections and action plans.
-    """
-    evaluation = await _get_completed_evaluation(db, evaluation_id)
-    instructor_name, class_name = await _resolve_instructor_and_class(db, evaluation)
-
-    generator = PDFReportGenerator()
-    pdf_bytes = generator.generate_reflection_worksheet(
-        instructor_name=instructor_name,
-        class_name=class_name,
-        strengths=evaluation.strengths,
-        growth_opportunities=evaluation.growth_opportunities,
-        report_markdown=evaluation.report_markdown or "",
-        coaching_data=evaluation.coaching_data or None,
-    )
-
-    filename = f"reflection_worksheet_{instructor_name.replace(' ', '_')}.pdf"
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+# NOTE: Reflection Worksheet endpoint removed in v2 (May 2026).
+# The standalone Reflection Worksheet PDF was deprecated when the v2 prompt
+# enhanced coaching_reflections (with Mezirow's three-level structure) and
+# next_steps (with explicit "before the next session" deadlines and named
+# adult-learning principles) inside the main coaching report. Those
+# enhancements made a separate worksheet redundant.
+#
+# The PDF generator method `PDFReportGenerator.generate_reflection_worksheet`
+# is preserved in pdf_report.py for restoration if ever needed. To restore
+# the endpoint, re-add the `download_worksheet_pdf` handler here and the
+# frontend's downloadWorksheetPdf client + button.
 
 
 # --- Helper functions for PDF endpoints ---

@@ -44,7 +44,7 @@ import {
   getEvaluation,
   getReport,
   downloadReportPdf,
-  downloadWorksheetPdf,
+  // downloadWorksheetPdf removed in v2 — see api/client.ts comment
 } from "../api/client";
 
 /** Status → visual treatment */
@@ -74,7 +74,7 @@ const STATUS_CONFIG: Record<
     icon: <CheckCircleIcon />,
     color: "#38a169",
     label: "Completed",
-    description: "Your coaching report is ready!",
+    description: "Your coaching report is ready!", // overridden below with instructor name
   },
   failed: {
     icon: <ErrorIcon />,
@@ -252,7 +252,9 @@ export default function EvaluationDetail() {
           <Box sx={{ flexGrow: 1 }}>
             <Typography variant="h6">{statusConfig.label}</Typography>
             <Typography variant="body2" color="text.secondary">
-              {statusConfig.description}
+              {evaluation.status === "completed" && report?.instructor_name
+                ? `${report.instructor_name} — Your coaching report is ready!`
+                : statusConfig.description}
             </Typography>
           </Box>
           <Chip
@@ -303,13 +305,9 @@ export default function EvaluationDetail() {
             >
               Download Report PDF
             </Button>
-            <Button
-              variant="outlined"
-              startIcon={<AssignmentIcon />}
-              onClick={() => downloadWorksheetPdf(evaluationId!)}
-            >
-              Download Reflection Worksheet
-            </Button>
+            {/* Reflection Worksheet button removed in v2 — coaching_reflections
+                and next_steps in the main report now cover the same ground,
+                with Mezirow's three-level structure and explicit deadlines. */}
           </Box>
 
           {/* Metrics Cards */}

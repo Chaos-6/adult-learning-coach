@@ -47,6 +47,9 @@ class TranscriptionService:
 
     def __init__(self):
         aai.settings.api_key = settings.ASSEMBLYAI_API_KEY
+        # Large video files (1 GB+) take much longer than the default 30s
+        # timeout to upload. Set to 1 hour to accommodate the largest files.
+        aai.settings.http_timeout = 3600.0
         self.transcriber = aai.Transcriber()
 
     def transcribe(self, audio_url: str) -> TranscriptionResult:

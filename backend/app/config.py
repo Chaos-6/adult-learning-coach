@@ -27,24 +27,33 @@ class Settings(BaseSettings):
         env_file=".env",        # Load from .env file
         env_file_encoding="utf-8",
         case_sensitive=True,     # ENV_VAR must match exactly
+        extra="ignore",         # Skip unknown env vars (e.g. VIMEO_ACCESS_TOKEN)
     )
 
     @model_validator(mode="before")
     @classmethod
     def prefer_dotenv_over_empty_env(cls, data):
-        """If an env var is empty but .env has a value, use the .env value.
+        """Always prefer .env file values over shell environment variables.
 
-        Pydantic Settings prioritizes real env vars over .env file values.
-        Problem: Claude Desktop sets ANTHROPIC_API_KEY="" in the shell,
-        which shadows the real key in .env. This validator fixes that by
-        loading .env values and filling in any blanks.
+        Pydantic Settings normally prioritizes shell env vars over .env.
+        This causes two problems:
+        1. Claude Desktop sets ANTHROPIC_API_KEY="" (empty) in the shell
+        2. After rotating keys, the shell may still have the OLD key set
+
+        Fix: load .env values and use them for ALL keys that have a value
+        in .env, overriding whatever the shell has.
         """
+        from pathlib import Path
+
         from dotenv import dotenv_values
 
-        dotenv_vals = dotenv_values(".env")
+        # Find .env relative to this file (backend/.env), not cwd
+        env_path = Path(__file__).resolve().parent.parent / ".env"
+        dotenv_vals = dotenv_values(env_path)
+
         for key, dotenv_value in dotenv_vals.items():
-            # If the field is missing or empty, use the .env value
-            if dotenv_value and (key not in data or not data.get(key)):
+            # .env always wins if it has a non-empty value
+            if dotenv_value:
                 data[key] = dotenv_value
         return data
 

@@ -42,7 +42,8 @@ MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB per PRD
 async def upload_video(
     file: UploadFile = File(...),
     instructor_id: UUID = Form(...),
-    topic: Optional[str] = Form(None),
+    class_name: Optional[str] = Form(None),
+    instructor_name: Optional[str] = Form(None),
     session_number: Optional[int] = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
@@ -96,7 +97,8 @@ async def upload_video(
         format=file_extension,
         upload_status="uploaded",
         metadata_={
-            "topic": topic,
+            "class_name": class_name,
+            "instructor_name": instructor_name,
             "session_number": session_number,
             "original_filename": file.filename,
         },
